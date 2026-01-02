@@ -7,18 +7,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
-	"orion-agent/internal/auth"
-	"orion-agent/internal/client"
-	"orion-agent/internal/config"
-	"orion-agent/internal/event"
-	"orion-agent/internal/handler"
-	"orion-agent/internal/logger"
-	"orion-agent/internal/service"
-	"orion-agent/internal/store"
-	"orion-agent/internal/sync"
+	"orion-agent/internal/data/store"
+	"orion-agent/internal/infra/config"
+	"orion-agent/internal/infra/logger"
+	"orion-agent/internal/service/event"
+	"orion-agent/internal/service/sync"
+	"orion-agent/internal/utils"
 )
 
 // App is the main application orchestrator.
@@ -26,9 +22,9 @@ type App struct {
 	Config      *config.Config
 	Log         *logger.Logger
 	Store       *store.Store
-	Client      *client.Client
+	Client      *Client
 	Dispatcher  *event.Dispatcher
-	JIDService  *service.JIDService
+	JIDService  *utils.Utils
 	SyncService *sync.SyncService
 
 	// Sub-stores for convenience
@@ -74,7 +70,7 @@ func New(cfg *config.Config) (*App, error) {
 	labelStore := store.NewLabelStore(appStore)
 
 	// Create client
-	waClient, err := client.New(cfg, appStore, log)
+	waClient, err := NewClient(cfg, appStore, log)
 	if err != nil {
 		appStore.Close()
 		return nil, fmt.Errorf("failed to create client: %w", err)
@@ -83,19 +79,23 @@ func New(cfg *config.Config) (*App, error) {
 	// Create dispatcher
 	dispatcher := event.NewDispatcher(log)
 
-	// Create JID service (uses ContactStore for PN/LID mappings)
-	jidService := service.NewJIDService(waClient.Underlying(), contactStore, log)
+	// Create utils (JID normalization, etc.)
+	appUtils := utils.New(contactStore, waClient.Underlying())
+
+	// Create sync state store
+	syncStateStore := store.NewSyncStateStore(appStore)
 
 	// Create sync service with ALL stores
 	syncService := sync.NewSyncService(
 		waClient.Underlying(),
-		jidService,
+		appUtils,
 		contactStore,
 		groupStore,
 		chatStore,
 		blocklistStore,
 		privacyStore,
 		newsletterStore,
+		syncStateStore,
 		log,
 	)
 
@@ -107,7 +107,7 @@ func New(cfg *config.Config) (*App, error) {
 		Store:        appStore,
 		Client:       waClient,
 		Dispatcher:   dispatcher,
-		JIDService:   jidService,
+		JIDService:   appUtils,
 		SyncService:  syncService,
 		ContactStore: contactStore,
 		ChatStore:    chatStore,
@@ -118,14 +118,17 @@ func New(cfg *config.Config) (*App, error) {
 		cancel:       cancel,
 	}
 
+	// Set up sync dispatcher for coalescence
+	syncService.SetDispatcher(ctx)
+
 	// Register event handler
 	waClient.AddEventHandler(app.handleEvent)
 
 	// Register DataHandler for persistence (normalizes JIDs and saves to DB)
-	dataHandler := handler.NewDataHandler(
+	dataHandler := event.NewDataHandler(
 		ctx,
 		log,
-		jidService,
+		appUtils,
 		messageStore,
 		contactStore,
 		chatStore,
@@ -187,129 +190,26 @@ func (a *App) connect() error {
 	}
 
 	// Handle QR
-	qrHandler := auth.NewQRHandler(a.Log)
+	qrHandler := NewQRHandler(a.Log)
 	return qrHandler.HandleQRChannel(qrChan)
 }
 
-// handleEvent is the main event handler that routes to dispatcher.
-// Uses comprehensive coalescence to fill ALL missing data from events.
+// handleEvent is the main event handler that routes events to services.
 func (a *App) handleEvent(evt interface{}) {
-	// Handle connection events and coalescence
+	// Handle special app-level events
 	switch e := evt.(type) {
 	case *events.Connected:
 		a.Log.Infof("Connected to WhatsApp")
-		// Trigger full sync on connect
-		go func() {
-			if err := a.SyncService.FullSync(a.ctx); err != nil {
-				a.Log.Warnf("Initial sync failed: %v", err)
-			}
-			// Start periodic scheduler
-			a.SyncService.StartScheduler(sync.DefaultSchedulerConfig())
-		}()
 
 	case *events.PairSuccess:
 		a.Log.Infof("Paired successfully as %s", e.ID)
 		a.JIDService.StoreMappingFromEvent(e.ID, e.LID)
-
-	// =====================================================
-	// COMPREHENSIVE COALESCENCE - Fill ALL missing data
-	// =====================================================
-
-	case *events.Message:
-		// Coalescence: sync sender + group if unknown
-		go a.SyncService.OnNewMessage(a.ctx, e.Info.Chat, e.Info.Sender, e.Info.IsGroup)
-
-	case *events.Receipt:
-		// Coalescence: sync receipt sender
-		go a.SyncService.OnNewContact(a.ctx, e.Sender)
-
-	case *events.Presence:
-		// Coalescence: sync contact from presence
-		go a.SyncService.OnPresenceUpdate(a.ctx, e.From)
-
-	case *events.ChatPresence:
-		// Coalescence: sync sender from typing status
-		go a.SyncService.OnChatPresenceUpdate(a.ctx, e.Chat, e.Sender)
-
-	case *events.PushName:
-		// Coalescence: sync profile pic on push name update
-		go a.SyncService.OnPushNameUpdate(a.ctx, e.JID)
-
-	case *events.Picture:
-		// Coalescence: fetch full picture info
-		go a.SyncService.OnPictureUpdate(a.ctx, e.JID, e.PictureID)
-
-	case *events.JoinedGroup:
-		// Coalescence: full sync for new group
-		go a.SyncService.OnGroupJoined(a.ctx, e.JID)
-
-	case *events.GroupInfo:
-		// Coalescence: sync group info changes + participants
-		go func() {
-			a.SyncService.OnGroupInfoChange(a.ctx, e.JID)
-			// Sync all mentioned participants
-			var participantJIDs []types.JID
-			if e.Join != nil {
-				participantJIDs = append(participantJIDs, e.Join...)
-			}
-			if e.Leave != nil {
-				participantJIDs = append(participantJIDs, e.Leave...)
-			}
-			if len(participantJIDs) > 0 {
-				a.SyncService.OnGroupParticipantsChange(a.ctx, e.JID, participantJIDs)
-			}
-		}()
-
-	case *events.HistorySync:
-		// Coalescence: batch sync contacts/groups from history
-		go func() {
-			// Collect JIDs from history sync
-			var contactJIDs []types.JID
-			var groupJIDs []types.JID
-			if e.Data != nil && e.Data.Conversations != nil {
-				for _, conv := range e.Data.Conversations {
-					if conv.ID != nil {
-						jid, _ := types.ParseJID(*conv.ID)
-						switch jid.Server {
-						case types.GroupServer:
-							groupJIDs = append(groupJIDs, jid)
-						case types.HiddenUserServer, types.DefaultUserServer:
-							contactJIDs = append(contactJIDs, jid)
-						}
-					}
-				}
-			}
-			a.SyncService.OnHistorySyncContacts(a.ctx, contactJIDs)
-			a.SyncService.OnHistorySyncGroups(a.ctx, groupJIDs)
-		}()
-
-	case *events.CallOffer:
-		// Coalescence: sync caller info
-		go a.SyncService.OnCallReceived(a.ctx, e.CallCreator)
-
-	case *events.Blocklist:
-		// Coalescence: refresh blocklist
-		go a.SyncService.OnBlocklistChange(a.ctx)
-
-	case *events.PrivacySettings:
-		// Coalescence: refresh privacy settings
-		go a.SyncService.OnPrivacySettingsChange(a.ctx)
-
-	case *events.BusinessName:
-		// Coalescence: sync contact with business name
-		go a.SyncService.OnNewContact(a.ctx, e.JID)
-
-	case *events.Contact:
-		// Coalescence: sync full contact info
-		go a.SyncService.OnNewContact(a.ctx, e.JID)
-
-	case *events.NewsletterJoin:
-		// Coalescence: newsletter info
-		go a.SyncService.OnNewsletterMessage(a.ctx, e.ID)
 	}
 
-	// Route to dispatcher for normal handling
+	// Route to event dispatcher for persistence
 	a.Dispatcher.Handle(evt)
+	// Route to sync service for coalescence
+	a.SyncService.Handle(evt)
 }
 
 // Shutdown gracefully shuts down the application.

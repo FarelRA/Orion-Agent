@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"orion-agent/internal/app"
-	"orion-agent/internal/config"
+	"orion-agent/internal/infra/config"
 )
 
 func main() {
