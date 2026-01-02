@@ -211,12 +211,8 @@ func extractHistoryMessage(histMsg *waHistorySync.HistorySyncMsg, chatJID types.
 	if protoMsg := webMsg.GetMessage(); protoMsg != nil {
 		msg.MessageType = determineMessageType(protoMsg)
 
-		// Text content
-		if txt := protoMsg.GetConversation(); txt != "" {
-			msg.TextContent = txt
-		} else if ext := protoMsg.GetExtendedTextMessage(); ext != nil {
-			msg.TextContent = ext.GetText()
-		}
+		// Extract text content (includes link preview)
+		extractTextContent(protoMsg, msg)
 
 		// Extract media
 		extractMedia(protoMsg, msg)
@@ -232,6 +228,15 @@ func extractHistoryMessage(histMsg *waHistorySync.HistorySyncMsg, chatJID types.
 
 		// Extract poll
 		extractPoll(protoMsg, msg)
+
+		// Extract event
+		extractEventMessage(protoMsg, msg)
+
+		// Extract group invite
+		extractGroupInvite(protoMsg, msg)
+
+		// Extract interactive
+		extractInteractive(protoMsg, msg)
 	}
 
 	// Status flags
