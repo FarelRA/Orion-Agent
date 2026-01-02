@@ -71,6 +71,7 @@ func New(cfg *config.Config) (*App, error) {
 	reactionStore := store.NewReactionStore(appStore)
 	callStore := store.NewCallStore(appStore)
 	pollStore := store.NewPollStore(appStore)
+	labelStore := store.NewLabelStore(appStore)
 
 	// Create client
 	waClient, err := client.New(cfg, appStore, log)
@@ -134,6 +135,9 @@ func New(cfg *config.Config) (*App, error) {
 		reactionStore,
 		callStore,
 		pollStore,
+		labelStore,
+		privacyStore,
+		blocklistStore,
 	)
 	dispatcher.Register(dataHandler)
 

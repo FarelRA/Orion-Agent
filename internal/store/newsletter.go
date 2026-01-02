@@ -17,6 +17,7 @@ type Newsletter struct {
 	PictureID         string
 	PictureURL        string
 	PreviewURL        string
+	InviteCode        string
 	InviteLink        string
 	Role              string
 	Muted             bool
@@ -180,5 +181,23 @@ func (s *NewsletterStore) UpdateProfilePic(jid types.JID, picID, picURL string) 
 	_, err := s.store.Exec(`
 		UPDATE orion_newsletters SET picture_id = ?, picture_url = ?, updated_at = ? WHERE jid = ?
 	`, picID, picURL, now, jid.String())
+	return err
+}
+
+// SetRole updates the user's role in the newsletter.
+func (s *NewsletterStore) SetRole(jid types.JID, role string) error {
+	now := time.Now().Unix()
+	_, err := s.store.Exec(`
+		UPDATE orion_newsletters SET role = ?, updated_at = ? WHERE jid = ?
+	`, role, now, jid.String())
+	return err
+}
+
+// SetMuted updates the newsletter's muted status.
+func (s *NewsletterStore) SetMuted(jid types.JID, muted bool) error {
+	now := time.Now().Unix()
+	_, err := s.store.Exec(`
+		UPDATE orion_newsletters SET muted = ?, updated_at = ? WHERE jid = ?
+	`, boolToInt(muted), now, jid.String())
 	return err
 }

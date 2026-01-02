@@ -71,6 +71,16 @@ func (s *BlocklistStore) Remove(jid types.JID) error {
 	return err
 }
 
+// Block adds a contact to the blocklist (alias for Put).
+func (s *BlocklistStore) Block(jid types.JID) error {
+	return s.Put(jid)
+}
+
+// Unblock removes a contact from the blocklist (alias for Remove).
+func (s *BlocklistStore) Unblock(jid types.JID) error {
+	return s.Remove(jid)
+}
+
 // Replace replaces the entire blocklist with new JIDs.
 func (s *BlocklistStore) Replace(jids []types.JID) error {
 	tx, err := s.store.Begin()

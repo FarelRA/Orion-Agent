@@ -8,9 +8,20 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-// Poll represents poll metadata stored with the message.
-// The actual poll question/options are in the Message struct.
-// This store tracks votes.
+// Poll represents a poll message.
+type Poll struct {
+	MessageID     string
+	ChatJID       types.JID
+	CreatorLID    types.JID
+	Question      string
+	Options       []string
+	IsMultiSelect bool
+	SelectMax     int
+	EncryptionKey []byte
+	CreatedAt     time.Time
+}
+
+// PollVote represents a vote on a poll.
 type PollVote struct {
 	MessageID       string    // Poll message ID
 	ChatJID         types.JID // Chat where poll was sent
@@ -19,7 +30,7 @@ type PollVote struct {
 	Timestamp       time.Time
 }
 
-// PollStore handles poll vote operations.
+// PollStore handles poll operations.
 type PollStore struct {
 	store *Store
 }
@@ -27,6 +38,29 @@ type PollStore struct {
 // NewPollStore creates a new PollStore.
 func NewPollStore(s *Store) *PollStore {
 	return &PollStore{store: s}
+}
+
+// Put saves a poll.
+func (s *PollStore) Put(p *Poll) error {
+	optionsJSON, _ := json.Marshal(p.Options)
+
+	_, err := s.store.Exec(`
+		INSERT INTO orion_polls (message_id, chat_jid, creator_lid, question, options, is_multi_select, select_max, encryption_key, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(message_id, chat_jid) DO UPDATE SET
+			question = excluded.question,
+			options = excluded.options,
+			is_multi_select = excluded.is_multi_select,
+			select_max = excluded.select_max,
+			encryption_key = excluded.encryption_key
+	`, p.MessageID, p.ChatJID.String(), p.CreatorLID.String(), p.Question, optionsJSON,
+		boolToInt(p.IsMultiSelect), p.SelectMax, p.EncryptionKey, p.CreatedAt.Unix())
+	return err
+}
+
+// SaveVote saves or updates a poll vote (alias for PutVote).
+func (s *PollStore) SaveVote(v *PollVote) error {
+	return s.PutVote(v)
 }
 
 // PutVote saves or updates a poll vote.

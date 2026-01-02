@@ -16,6 +16,7 @@ import (
 
 // DataHandler persists all event data to the database.
 // All JIDs are normalized to LID form before saving.
+// This handler captures ALL available information from whatsmeow events.
 type DataHandler struct {
 	event.BaseHandler
 	ctx         context.Context
@@ -30,6 +31,9 @@ type DataHandler struct {
 	reactions   *store.ReactionStore
 	calls       *store.CallStore
 	polls       *store.PollStore
+	labels      *store.LabelStore
+	privacy     *store.PrivacyStore
+	blocklist   *store.BlocklistStore
 }
 
 // NewDataHandler creates a new DataHandler.
@@ -46,6 +50,9 @@ func NewDataHandler(
 	reactions *store.ReactionStore,
 	calls *store.CallStore,
 	polls *store.PollStore,
+	labels *store.LabelStore,
+	privacy *store.PrivacyStore,
+	blocklist *store.BlocklistStore,
 ) *DataHandler {
 	return &DataHandler{
 		ctx:         ctx,
@@ -60,11 +67,32 @@ func NewDataHandler(
 		reactions:   reactions,
 		calls:       calls,
 		polls:       polls,
+		labels:      labels,
+		privacy:     privacy,
+		blocklist:   blocklist,
 	}
 }
 
+// ===========================================================================
+// MESSAGE EVENTS
+// ===========================================================================
+
 // OnMessage saves incoming messages to the database.
 func (h *DataHandler) OnMessage(evt *events.Message) {
+	// Skip special message types that have their own handlers
+	if evt.Message.GetReactionMessage() != nil {
+		h.handleReaction(evt)
+		return
+	}
+	if pm := evt.Message.GetProtocolMessage(); pm != nil {
+		h.handleProtocolMessage(evt)
+		return
+	}
+	if evt.Message.GetPollUpdateMessage() != nil {
+		h.handlePollUpdate(evt)
+		return
+	}
+
 	msg := extract.MessageFromEvent(evt)
 
 	// Normalize all JIDs in the message
@@ -72,6 +100,14 @@ func (h *DataHandler) OnMessage(evt *events.Message) {
 	msg.SenderLID = h.jidService.NormalizeJID(h.ctx, msg.SenderLID)
 	msg.QuotedSenderLID = h.jidService.NormalizeJID(h.ctx, msg.QuotedSenderLID)
 	msg.BroadcastListJID = h.jidService.NormalizeJID(h.ctx, msg.BroadcastListJID)
+
+	// Normalize mentioned JIDs
+	for i := range msg.MentionedJIDs {
+		msg.MentionedJIDs[i] = h.jidService.NormalizeJID(h.ctx, msg.MentionedJIDs[i])
+	}
+	for i := range msg.GroupMentions {
+		msg.GroupMentions[i].GroupJID = h.jidService.NormalizeJID(h.ctx, msg.GroupMentions[i].GroupJID)
+	}
 
 	// Normalize chat JID for operations
 	chatJID := h.jidService.NormalizeJID(h.ctx, evt.Info.Chat)
@@ -81,6 +117,10 @@ func (h *DataHandler) OnMessage(evt *events.Message) {
 	chatType := store.ChatTypeUser
 	if evt.Info.IsGroup {
 		chatType = store.ChatTypeGroup
+	} else if chatJID.Server == types.NewsletterServer {
+		chatType = store.ChatTypeNewsletter
+	} else if chatJID.Server == types.BroadcastServer {
+		chatType = store.ChatTypeBroadcast
 	}
 	if err := h.chats.EnsureExists(chatJID, chatType); err != nil {
 		h.log.Errorf("Failed to ensure chat exists: %v", err)
@@ -90,7 +130,7 @@ func (h *DataHandler) OnMessage(evt *events.Message) {
 	if err := h.messages.Put(msg); err != nil {
 		h.log.Errorf("Failed to save message: %v", err)
 	} else {
-		h.log.Debugf("Saved message %s from %s", msg.ID, msg.SenderLID)
+		h.log.Debugf("Saved message %s from %s (type: %s)", msg.ID, msg.SenderLID, msg.MessageType)
 	}
 
 	// Update chat last message
@@ -103,6 +143,117 @@ func (h *DataHandler) OnMessage(evt *events.Message) {
 		if err := h.contacts.UpdatePushName(senderJID, evt.Info.PushName); err != nil {
 			h.log.Errorf("Failed to update push name: %v", err)
 		}
+	}
+
+	// Handle poll creation message
+	if msg.MessageType == "poll" || msg.MessageType == "poll_v2" || msg.MessageType == "poll_v3" {
+		h.savePollCreation(msg, chatJID, senderJID)
+	}
+}
+
+// handleReaction handles reaction messages.
+func (h *DataHandler) handleReaction(evt *events.Message) {
+	rm := evt.Message.GetReactionMessage()
+	if rm == nil {
+		return
+	}
+
+	// Parse target message
+	targetKey := rm.GetKey()
+	targetMsgID := targetKey.GetID()
+	targetChat, _ := types.ParseJID(targetKey.GetRemoteJID())
+
+	// Normalize JIDs
+	targetChat = h.jidService.NormalizeJID(h.ctx, targetChat)
+	senderLID := h.jidService.NormalizeJID(h.ctx, evt.Info.Sender)
+
+	if rm.GetText() == "" {
+		// Reaction removal
+		if err := h.reactions.Delete(targetMsgID, targetChat, senderLID); err != nil {
+			h.log.Errorf("Failed to delete reaction: %v", err)
+		}
+	} else {
+		// Reaction add/update
+		if err := h.reactions.Put(&store.Reaction{
+			MessageID: targetMsgID,
+			ChatJID:   targetChat,
+			SenderLID: senderLID,
+			Emoji:     rm.GetText(),
+			Timestamp: evt.Info.Timestamp,
+		}); err != nil {
+			h.log.Errorf("Failed to save reaction: %v", err)
+		}
+	}
+}
+
+// handleProtocolMessage handles protocol messages (edits, revokes, etc.).
+func (h *DataHandler) handleProtocolMessage(evt *events.Message) {
+	pm := evt.Message.GetProtocolMessage()
+	if pm == nil {
+		return
+	}
+
+	targetKey := pm.GetKey()
+	targetMsgID := targetKey.GetID()
+	targetChat := h.jidService.NormalizeJID(h.ctx, evt.Info.Chat)
+
+	switch pm.GetType() {
+	case waE2E.ProtocolMessage_MESSAGE_EDIT:
+		editedMsg := pm.GetEditedMessage()
+		newContent := ""
+		if txt := editedMsg.GetConversation(); txt != "" {
+			newContent = txt
+		} else if ext := editedMsg.GetExtendedTextMessage(); ext != nil {
+			newContent = ext.GetText()
+		}
+		if err := h.messages.MarkEdited(targetMsgID, targetChat, newContent, evt.Info.Timestamp); err != nil {
+			h.log.Errorf("Failed to mark message as edited: %v", err)
+		}
+
+	case waE2E.ProtocolMessage_REVOKE:
+		if err := h.messages.SetRevoked(targetMsgID, targetChat); err != nil {
+			h.log.Errorf("Failed to mark message as revoked: %v", err)
+		}
+
+	case waE2E.ProtocolMessage_EPHEMERAL_SETTING:
+		duration := pm.GetEphemeralExpiration()
+		if err := h.chats.SetEphemeral(targetChat, duration, evt.Info.Timestamp); err != nil {
+			h.log.Errorf("Failed to update ephemeral setting: %v", err)
+		}
+	}
+}
+
+// handlePollUpdate handles poll vote updates.
+func (h *DataHandler) handlePollUpdate(evt *events.Message) {
+	vote := extract.PollUpdateFromEvent(evt)
+	if vote == nil {
+		return
+	}
+
+	// Normalize JIDs
+	vote.ChatJID = h.jidService.NormalizeJID(h.ctx, vote.ChatJID)
+	vote.VoterLID = h.jidService.NormalizeJID(h.ctx, vote.VoterLID)
+
+	if err := h.polls.SaveVote(vote); err != nil {
+		h.log.Errorf("Failed to save poll vote: %v", err)
+	}
+}
+
+// savePollCreation saves poll creation to the polls table.
+func (h *DataHandler) savePollCreation(msg *store.Message, chatJID, creatorLID types.JID) {
+	poll := &store.Poll{
+		MessageID:     msg.ID,
+		ChatJID:       chatJID,
+		CreatorLID:    creatorLID,
+		Question:      msg.PollName,
+		Options:       msg.PollOptions,
+		IsMultiSelect: msg.PollSelectMax != 1,
+		SelectMax:     msg.PollSelectMax,
+		EncryptionKey: msg.PollEncryptionKey,
+		CreatedAt:     msg.Timestamp,
+	}
+	if err := h.polls.Put(poll); err != nil {
+		h.log.Errorf("Failed to save poll: %v", err)
 	}
 }
 
@@ -118,6 +269,25 @@ func (h *DataHandler) OnReceipt(evt *events.Receipt) {
 
 	if err := h.receipts.PutMany(receipts); err != nil {
 		h.log.Errorf("Failed to save receipts: %v", err)
+	}
+}
+
+// OnUndecryptableMessage logs undecryptable messages.
+func (h *DataHandler) OnUndecryptableMessage(evt *events.UndecryptableMessage) {
+	h.log.Warnf("Undecryptable message from %s in %s: %v", evt.Info.Sender, evt.Info.Chat, evt.DecryptFailMode)
+}
+
+// ===========================================================================
+// CONTACT EVENTS
+// ===========================================================================
+
+// OnContact saves full contact information from app state sync.
+func (h *DataHandler) OnContact(evt *events.Contact) {
+	contact := extract.ContactFromEvent(evt)
+	contact.LID = h.jidService.NormalizeJID(h.ctx, contact.LID)
+
+	if err := h.contacts.Put(contact); err != nil {
+		h.log.Errorf("Failed to save contact: %v", err)
 	}
 }
 
@@ -141,6 +311,44 @@ func (h *DataHandler) OnBusinessName(evt *events.BusinessName) {
 	}
 }
 
+// OnPresence updates contact presence.
+func (h *DataHandler) OnPresence(evt *events.Presence) {
+	jid := h.jidService.NormalizeJID(h.ctx, evt.From)
+	if err := h.contacts.UpdatePresence(jid, !evt.Unavailable, evt.LastSeen); err != nil {
+		h.log.Errorf("Failed to update presence: %v", err)
+	}
+}
+
+// OnChatPresence handles typing/recording indicators.
+func (h *DataHandler) OnChatPresence(evt *events.ChatPresence) {
+	// Chat presence (typing, recording) is ephemeral - we can log but not persist
+	h.log.Debugf("Chat presence from %s in %s: %s %s", evt.Sender, evt.Chat, evt.State, evt.Media)
+}
+
+// OnPicture updates profile picture info.
+func (h *DataHandler) OnPicture(evt *events.Picture) {
+	jid := h.jidService.NormalizeJID(h.ctx, evt.JID)
+
+	switch evt.JID.Server {
+	case types.DefaultUserServer, types.HiddenUserServer:
+		if err := h.contacts.UpdateProfilePic(jid, evt.PictureID, ""); err != nil {
+			h.log.Errorf("Failed to update contact picture: %v", err)
+		}
+	case types.GroupServer:
+		if err := h.groups.UpdateProfilePic(jid, evt.PictureID, ""); err != nil {
+			h.log.Errorf("Failed to update group picture: %v", err)
+		}
+	case types.NewsletterServer:
+		if err := h.newsletters.UpdateProfilePic(jid, evt.PictureID, ""); err != nil {
+			h.log.Errorf("Failed to update newsletter picture: %v", err)
+		}
+	}
+}
+
+// ===========================================================================
+// GROUP EVENTS
+// ===========================================================================
+
 // OnGroupInfo updates group information.
 func (h *DataHandler) OnGroupInfo(evt *events.GroupInfo) {
 	group := extract.GroupFromEvent(evt)
@@ -156,7 +364,7 @@ func (h *DataHandler) OnGroupInfo(evt *events.GroupInfo) {
 
 	groupJID := h.jidService.NormalizeJID(h.ctx, evt.JID)
 
-	// Handle participant changes - normalize all JIDs
+	// Handle participant changes
 	for _, jid := range evt.Join {
 		normalizedJID := h.jidService.NormalizeJID(h.ctx, jid)
 		if err := h.groups.PutParticipant(&store.GroupParticipant{
@@ -226,6 +434,55 @@ func (h *DataHandler) OnJoinedGroup(evt *events.JoinedGroup) {
 	h.chats.EnsureExists(groupJID, store.ChatTypeGroup)
 }
 
+// ===========================================================================
+// NEWSLETTER EVENTS
+// ===========================================================================
+
+// OnNewsletterJoin saves newsletter data when joining.
+func (h *DataHandler) OnNewsletterJoin(evt *events.NewsletterJoin) {
+	newsletter := extract.NewsletterFromJoinEvent(evt)
+	if newsletter == nil {
+		return
+	}
+
+	// Newsletter JIDs don't need normalization
+	if err := h.newsletters.Put(newsletter); err != nil {
+		h.log.Errorf("Failed to save newsletter: %v", err)
+	}
+
+	// Ensure chat exists
+	h.chats.EnsureExists(newsletter.JID, store.ChatTypeNewsletter)
+	h.log.Infof("Joined newsletter: %s (%s)", newsletter.Name, newsletter.JID)
+}
+
+// OnNewsletterLeave handles leaving a newsletter.
+func (h *DataHandler) OnNewsletterLeave(evt *events.NewsletterLeave) {
+	if err := h.newsletters.SetRole(evt.ID, "left"); err != nil {
+		h.log.Errorf("Failed to mark newsletter as left: %v", err)
+	}
+	h.log.Infof("Left newsletter: %s", evt.ID)
+}
+
+// OnNewsletterMuteChange updates newsletter mute status.
+func (h *DataHandler) OnNewsletterMuteChange(evt *events.NewsletterMuteChange) {
+	muted := evt.Mute == types.NewsletterMuteOn
+	if err := h.newsletters.SetMuted(evt.ID, muted); err != nil {
+		h.log.Errorf("Failed to update newsletter mute: %v", err)
+	}
+}
+
+// OnNewsletterLiveUpdate handles live newsletter updates.
+func (h *DataHandler) OnNewsletterLiveUpdate(evt *events.NewsletterLiveUpdate) {
+	for _, msg := range evt.Messages {
+		// Process each message in the newsletter update
+		h.log.Debugf("Newsletter %s update: message %s", evt.JID, msg.MessageServerID)
+	}
+}
+
+// ===========================================================================
+// CHAT STATE EVENTS
+// ===========================================================================
+
 // OnPinChat updates chat pin status.
 func (h *DataHandler) OnPinChat(evt *events.Pin) {
 	jid, pinned, ts := extract.ChatStateFromPin(evt)
@@ -294,43 +551,150 @@ func (h *DataHandler) OnDeleteChat(evt *events.DeleteChat) {
 	}
 }
 
-// OnPresence updates contact presence.
-func (h *DataHandler) OnPresence(evt *events.Presence) {
-	jid := h.jidService.NormalizeJID(h.ctx, evt.From)
-	if err := h.contacts.UpdatePresence(jid, !evt.Unavailable, evt.LastSeen); err != nil {
-		h.log.Errorf("Failed to update presence: %v", err)
+// ===========================================================================
+// LABEL EVENTS
+// ===========================================================================
+
+// OnLabelEdit handles label creation/update/deletion.
+func (h *DataHandler) OnLabelEdit(evt *events.LabelEdit) {
+	if h.labels == nil {
+		return
+	}
+
+	label := extract.LabelFromEvent(evt)
+	if err := h.labels.Put(label); err != nil {
+		h.log.Errorf("Failed to save label: %v", err)
 	}
 }
 
-// OnPicture updates profile picture info.
-func (h *DataHandler) OnPicture(evt *events.Picture) {
+// OnLabelAssociationChat handles label assignment to chats.
+func (h *DataHandler) OnLabelAssociationChat(evt *events.LabelAssociationChat) {
+	if h.labels == nil {
+		return
+	}
+
 	jid := h.jidService.NormalizeJID(h.ctx, evt.JID)
-
-	switch evt.JID.Server {
-	case types.DefaultUserServer, types.HiddenUserServer:
-		// Contact picture
-		if err := h.contacts.UpdateProfilePic(jid, evt.PictureID, ""); err != nil {
-			h.log.Errorf("Failed to update contact picture: %v", err)
+	if evt.Action.GetLabeled() {
+		if err := h.labels.AssociateChat(evt.LabelID, jid, evt.Timestamp); err != nil {
+			h.log.Errorf("Failed to associate label with chat: %v", err)
 		}
-	case types.GroupServer:
-		// Group picture
-		if err := h.groups.UpdateProfilePic(jid, evt.PictureID, ""); err != nil {
-			h.log.Errorf("Failed to update group picture: %v", err)
-		}
-	case types.NewsletterServer:
-		// Newsletter picture
-		if err := h.newsletters.UpdateProfilePic(jid, evt.PictureID, ""); err != nil {
-			h.log.Errorf("Failed to update newsletter picture: %v", err)
+	} else {
+		if err := h.labels.RemoveChatAssociation(evt.LabelID, jid); err != nil {
+			h.log.Errorf("Failed to remove label from chat: %v", err)
 		}
 	}
 }
+
+// OnLabelAssociationMessage handles label assignment to messages.
+func (h *DataHandler) OnLabelAssociationMessage(evt *events.LabelAssociationMessage) {
+	if h.labels == nil {
+		return
+	}
+
+	jid := h.jidService.NormalizeJID(h.ctx, evt.JID)
+	if evt.Action.GetLabeled() {
+		if err := h.labels.AssociateMessage(evt.LabelID, jid, evt.MessageID, evt.Timestamp); err != nil {
+			h.log.Errorf("Failed to associate label with message: %v", err)
+		}
+	} else {
+		if err := h.labels.RemoveMessageAssociation(evt.LabelID, jid, evt.MessageID); err != nil {
+			h.log.Errorf("Failed to remove label from message: %v", err)
+		}
+	}
+}
+
+// ===========================================================================
+// PRIVACY EVENTS
+// ===========================================================================
+
+// OnBlocklist handles blocklist updates.
+func (h *DataHandler) OnBlocklist(evt *events.Blocklist) {
+	if h.blocklist == nil {
+		return
+	}
+
+	blocked, unblocked := extract.BlocklistFromEvent(evt)
+
+	for _, jid := range blocked {
+		normalizedJID := h.jidService.NormalizeJID(h.ctx, jid)
+		if err := h.blocklist.Block(normalizedJID); err != nil {
+			h.log.Errorf("Failed to block JID: %v", err)
+		}
+	}
+
+	for _, jid := range unblocked {
+		normalizedJID := h.jidService.NormalizeJID(h.ctx, jid)
+		if err := h.blocklist.Unblock(normalizedJID); err != nil {
+			h.log.Errorf("Failed to unblock JID: %v", err)
+		}
+	}
+
+	h.log.Infof("Blocklist updated: %d blocked, %d unblocked", len(blocked), len(unblocked))
+}
+
+// OnPrivacySettings handles privacy settings changes.
+func (h *DataHandler) OnPrivacySettings(evt *events.PrivacySettings) {
+	if h.privacy == nil {
+		return
+	}
+
+	settings := extract.PrivacySettingsFromEvent(evt)
+	if err := h.privacy.Put(settings); err != nil {
+		h.log.Errorf("Failed to save privacy settings: %v", err)
+	}
+}
+
+// ===========================================================================
+// CALL EVENTS
+// ===========================================================================
+
+// OnCallOffer handles incoming call offers.
+func (h *DataHandler) OnCallOffer(evt *events.CallOffer) {
+	call := extract.CallFromOffer(evt)
+	call.CallerLID = h.jidService.NormalizeJID(h.ctx, call.CallerLID)
+	call.GroupJID = h.jidService.NormalizeJID(h.ctx, call.GroupJID)
+
+	if err := h.calls.Put(call); err != nil {
+		h.log.Errorf("Failed to save call offer: %v", err)
+	}
+}
+
+// OnCallAccept handles call acceptance.
+func (h *DataHandler) OnCallAccept(evt *events.CallAccept) {
+	if err := h.calls.UpdateOutcome(evt.CallID, "accepted", 0); err != nil {
+		h.log.Errorf("Failed to update call accept: %v", err)
+	}
+}
+
+// OnCallTerminate handles call termination.
+func (h *DataHandler) OnCallTerminate(evt *events.CallTerminate) {
+	callID, outcome := extract.CallFromTerminate(evt)
+	if err := h.calls.UpdateOutcome(callID, outcome, 0); err != nil {
+		h.log.Errorf("Failed to update call outcome: %v", err)
+	}
+}
+
+// ===========================================================================
+// IDENTITY EVENTS
+// ===========================================================================
+
+// OnIdentityChange handles identity key changes.
+func (h *DataHandler) OnIdentityChange(evt *events.IdentityChange) {
+	jid := h.jidService.NormalizeJID(h.ctx, evt.JID)
+	h.log.Infof("Identity changed for %s (implicit: %v)", jid, evt.Implicit)
+	// Identity changes are logged for security awareness
+	// Could be extended to store in a security_events table
+}
+
+// ===========================================================================
+// HISTORY SYNC
+// ===========================================================================
 
 // OnHistorySync processes history sync data.
 func (h *DataHandler) OnHistorySync(evt *events.HistorySync) {
 	data := extract.FromHistorySync(evt)
 
-	// Save JID mappings (using ContactStore.PutJIDMappings)
-	// Note: JID mappings are already LID/PN pairs, no normalization needed
+	// Save JID mappings
 	if len(data.JIDMappings) > 0 {
 		mappings := make([]store.JIDMapping, len(data.JIDMappings))
 		for i, m := range data.JIDMappings {
@@ -389,113 +753,17 @@ func (h *DataHandler) OnHistorySync(evt *events.HistorySync) {
 		len(data.Chats), len(data.Groups), len(data.Contacts), len(data.Messages))
 }
 
-// OnReaction handles message reactions.
-func (h *DataHandler) OnReaction(evt *events.Message) {
-	rm := evt.Message.GetReactionMessage()
-	if rm == nil {
-		return
-	}
-
-	// Parse target message
-	targetKey := rm.GetKey()
-	targetMsgID := targetKey.GetID()
-	targetChat, _ := types.ParseJID(targetKey.GetRemoteJID())
-
-	// Normalize JIDs
-	targetChat = h.jidService.NormalizeJID(h.ctx, targetChat)
-	senderLID := h.jidService.NormalizeJID(h.ctx, evt.Info.Sender)
-
-	if rm.GetText() == "" {
-		// Reaction removal
-		if err := h.reactions.Delete(targetMsgID, targetChat, senderLID); err != nil {
-			h.log.Errorf("Failed to delete reaction: %v", err)
-		}
-	} else {
-		// Reaction add/update
-		if err := h.reactions.Put(&store.Reaction{
-			MessageID: targetMsgID,
-			ChatJID:   targetChat,
-			SenderLID: senderLID,
-			Emoji:     rm.GetText(),
-			Timestamp: evt.Info.Timestamp,
-		}); err != nil {
-			h.log.Errorf("Failed to save reaction: %v", err)
-		}
-	}
+// OnAppStateSyncComplete handles app state sync completion.
+func (h *DataHandler) OnAppStateSyncComplete(evt *events.AppStateSyncComplete) {
+	h.log.Infof("App state sync complete: %s", evt.Name)
 }
 
-// OnCallOffer handles incoming call offers.
-func (h *DataHandler) OnCallOffer(evt *events.CallOffer) {
-	callerLID := h.jidService.NormalizeJID(h.ctx, evt.CallCreator)
-	groupJID := h.jidService.NormalizeJID(h.ctx, evt.GroupJID)
-
-	isGroup := !evt.GroupJID.IsEmpty()
-
-	if err := h.calls.Put(&store.Call{
-		CallID:    evt.CallID,
-		CallerLID: callerLID,
-		GroupJID:  groupJID,
-		IsGroup:   isGroup,
-		Timestamp: evt.Timestamp,
-		Outcome:   "pending",
-	}); err != nil {
-		h.log.Errorf("Failed to save call offer: %v", err)
-	}
+// OnOfflineSyncPreview handles offline sync preview.
+func (h *DataHandler) OnOfflineSyncPreview(evt *events.OfflineSyncPreview) {
+	h.log.Infof("Offline sync preview: %d total events, %d messages", evt.Total, evt.Messages)
 }
 
-// OnCallTerminate handles call termination.
-func (h *DataHandler) OnCallTerminate(evt *events.CallTerminate) {
-	outcome := "ended"
-	if evt.Reason == "timeout" {
-		outcome = "missed"
-	} else if evt.Reason == "busy" {
-		outcome = "busy"
-	} else if evt.Reason == "reject" {
-		outcome = "rejected"
-	}
-
-	if err := h.calls.UpdateOutcome(evt.CallID, outcome, 0); err != nil {
-		h.log.Errorf("Failed to update call outcome: %v", err)
-	}
-}
-
-// OnMessageEdit handles message edits.
-func (h *DataHandler) OnMessageEdit(evt *events.Message) {
-	pm := evt.Message.GetProtocolMessage()
-	if pm == nil || pm.GetType() != waE2E.ProtocolMessage_MESSAGE_EDIT {
-		return
-	}
-
-	editedMsg := pm.GetEditedMessage()
-	targetKey := pm.GetKey()
-	targetMsgID := targetKey.GetID()
-	targetChat := h.jidService.NormalizeJID(h.ctx, evt.Info.Chat)
-
-	// Extract new content
-	newContent := ""
-	if txt := editedMsg.GetConversation(); txt != "" {
-		newContent = txt
-	} else if ext := editedMsg.GetExtendedTextMessage(); ext != nil {
-		newContent = ext.GetText()
-	}
-
-	if err := h.messages.MarkEdited(targetMsgID, targetChat, newContent, evt.Info.Timestamp); err != nil {
-		h.log.Errorf("Failed to mark message as edited: %v", err)
-	}
-}
-
-// OnMessageRevoke handles message revocation (delete for everyone).
-func (h *DataHandler) OnMessageRevoke(evt *events.Message) {
-	pm := evt.Message.GetProtocolMessage()
-	if pm == nil || pm.GetType() != waE2E.ProtocolMessage_REVOKE {
-		return
-	}
-
-	targetKey := pm.GetKey()
-	targetMsgID := targetKey.GetID()
-	targetChat := h.jidService.NormalizeJID(h.ctx, evt.Info.Chat)
-
-	if err := h.messages.SetRevoked(targetMsgID, targetChat); err != nil {
-		h.log.Errorf("Failed to mark message as revoked: %v", err)
-	}
+// OnOfflineSyncCompleted handles offline sync completion.
+func (h *DataHandler) OnOfflineSyncCompleted(evt *events.OfflineSyncCompleted) {
+	h.log.Infof("Offline sync completed: %d events processed", evt.Count)
 }
