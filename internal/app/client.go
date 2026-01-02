@@ -33,6 +33,14 @@ func NewClient(cfg *config.Config, appStore *appstore.Store, log waLog.Logger) (
 		return nil, fmt.Errorf("failed to get device: %w", err)
 	}
 
+	// Update device name from config
+	if cfg.DeviceName != "" && device.Platform != cfg.DeviceName {
+		device.Platform = cfg.DeviceName
+		if err := device.Save(context.Background()); err != nil {
+			log.Warnf("Failed to update device name: %v", err)
+		}
+	}
+
 	// Create whatsmeow client
 	waClient := whatsmeow.NewClient(device, log.Sub("whatsmeow"))
 	waClient.EnableAutoReconnect = true
