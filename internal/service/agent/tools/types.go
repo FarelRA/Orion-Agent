@@ -19,10 +19,11 @@ type Tool interface {
 
 // ExecutionContext provides context for tool execution.
 type ExecutionContext struct {
-	ChatJID   types.JID
-	SenderJID types.JID
-	MessageID string
-	FromMe    bool
+	ChatJID    types.JID
+	SenderJID  types.JID
+	MessageID  string
+	FromMe     bool
+	MessageMap map[int]string // index → real message ID
 }
 
 // Result is the result of a tool execution.
@@ -56,9 +57,9 @@ func Definition(t Tool) llm.Tool {
 
 // ParameterSchema helps build JSON schema for parameters.
 type ParameterSchema struct {
-	Type       string                     `json:"type"`
-	Properties map[string]PropertySchema  `json:"properties,omitempty"`
-	Required   []string                   `json:"required,omitempty"`
+	Type       string                    `json:"type"`
+	Properties map[string]PropertySchema `json:"properties,omitempty"`
+	Required   []string                  `json:"required,omitempty"`
 }
 
 // PropertySchema defines a single property in the schema.

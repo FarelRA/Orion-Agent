@@ -217,6 +217,8 @@ func (t *CreateEventTool) Execute(ctx context.Context, args json.RawMessage, exe
 }
 
 // RegisterInteractiveTools registers location, contact, and interactive tools.
+// Note: send_live_location and send_group_invite are removed as they require
+// data AI cannot provide (live GPS data, group JIDs, invite codes).
 func RegisterInteractiveTools(registry *tools.Registry, sendService *send.SendService) {
 	registry.Register(NewSendLocationTool(sendService))
 	registry.Register(NewSendContactTool(sendService))

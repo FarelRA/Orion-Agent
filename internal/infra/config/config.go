@@ -31,12 +31,13 @@ type Config struct {
 
 // AIConfig holds AI/LLM configuration.
 type AIConfig struct {
-	Enabled        bool          `json:"enabled"`
-	Models         []ModelConfig `json:"models"`
-	DefaultModel   string        `json:"default_model"`
-	SystemPrompt   string        `json:"system_prompt"`
-	CommandPrefix  string        `json:"command_prefix"`
-	MaxMessageAge  int           `json:"max_message_age"` // Max age in seconds for messages to process (0 = no limit)
+	Enabled       bool          `json:"enabled"`
+	Models        []ModelConfig `json:"models"`
+	DefaultModel  string        `json:"default_model"`
+	AgentName     string        `json:"agent_name"`
+	SystemPrompt  string        `json:"system_prompt"`
+	CommandPrefix string        `json:"command_prefix"`
+	MaxMessageAge int           `json:"max_message_age"` // Max age in seconds for messages to process (0 = no limit)
 
 	// Default trigger settings
 	Triggers TriggerConfig `json:"triggers"`
@@ -73,6 +74,7 @@ func Default() *Config {
 		HistorySyncPages: 10,
 		AI: AIConfig{
 			Enabled:       false,
+			AgentName:     "Orion",
 			CommandPrefix: "/",
 			SystemPrompt:  "You are a helpful AI assistant.",
 			MaxMessageAge: 60, // Default 60 seconds

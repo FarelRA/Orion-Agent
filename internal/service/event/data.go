@@ -91,6 +91,14 @@ func (h *DataHandler) OnMessage(evt *events.Message) {
 		h.handlePollUpdate(evt)
 		return
 	}
+	if evt.Message.GetPinInChatMessage() != nil {
+		h.handlePinMessage(evt)
+		return
+	}
+	if evt.Message.GetKeepInChatMessage() != nil {
+		h.handleKeepMessage(evt)
+		return
+	}
 
 	msg := extract.MessageFromEvent(evt)
 
@@ -253,6 +261,61 @@ func (h *DataHandler) savePollCreation(msg *store.Message, chatJID, creatorLID t
 	}
 	if err := h.polls.Put(poll); err != nil {
 		h.log.Errorf("Failed to save poll: %v", err)
+	}
+}
+
+// handlePinMessage handles pin/unpin messages.
+func (h *DataHandler) handlePinMessage(evt *events.Message) {
+	pin := evt.Message.GetPinInChatMessage()
+	if pin == nil {
+		return
+	}
+
+	// Get target message info
+	key := pin.GetKey()
+	targetMsgID := key.GetID()
+	targetChat, _ := types.ParseJID(key.GetRemoteJID())
+	targetChat = h.utils.NormalizeJID(h.ctx, targetChat)
+
+	// Determine if pin or unpin
+	isPinned := pin.GetType() == waE2E.PinInChatMessage_PIN_FOR_ALL
+	pinTime := evt.Info.Timestamp
+
+	if err := h.messages.SetPinned(targetMsgID, targetChat, isPinned, pinTime); err != nil {
+		h.log.Errorf("Failed to update pin status for message %s: %v", targetMsgID, err)
+	} else {
+		action := "pinned"
+		if !isPinned {
+			action = "unpinned"
+		}
+		h.log.Debugf("Message %s %s in %s", targetMsgID, action, targetChat)
+	}
+}
+
+// handleKeepMessage handles star/unstar (keep in chat) messages.
+func (h *DataHandler) handleKeepMessage(evt *events.Message) {
+	keep := evt.Message.GetKeepInChatMessage()
+	if keep == nil {
+		return
+	}
+
+	// Get target message info
+	key := keep.GetKey()
+	targetMsgID := key.GetID()
+	targetChat, _ := types.ParseJID(key.GetRemoteJID())
+	targetChat = h.utils.NormalizeJID(h.ctx, targetChat)
+
+	// Determine if star or unstar
+	isStarred := keep.GetKeepType() == waE2E.KeepType_KEEP_FOR_ALL
+
+	if err := h.messages.SetStarred(targetMsgID, targetChat, isStarred); err != nil {
+		h.log.Errorf("Failed to update star status for message %s: %v", targetMsgID, err)
+	} else {
+		action := "starred"
+		if !isStarred {
+			action = "unstarred"
+		}
+		h.log.Debugf("Message %s %s in %s", targetMsgID, action, targetChat)
 	}
 }
 
@@ -744,7 +807,7 @@ func (h *DataHandler) OnHistorySync(evt *events.HistorySync) {
 		msg.ChatJID = h.utils.NormalizeJID(h.ctx, msg.ChatJID)
 		msg.SenderLID = h.utils.NormalizeJID(h.ctx, msg.SenderLID)
 		msg.QuotedSenderLID = h.utils.NormalizeJID(h.ctx, msg.QuotedSenderLID)
-		
+
 		// Infer sender if missing
 		if msg.SenderLID.IsEmpty() {
 			if msg.FromMe {
@@ -757,7 +820,7 @@ func (h *DataHandler) OnHistorySync(evt *events.HistorySync) {
 				continue
 			}
 		}
-		
+
 		if err := h.messages.Put(msg); err != nil {
 			h.log.Errorf("Failed to save message: %v", err)
 		} else {

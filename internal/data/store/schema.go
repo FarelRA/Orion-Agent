@@ -212,6 +212,8 @@ CREATE TABLE IF NOT EXISTS orion_messages (
     is_ephemeral INTEGER DEFAULT 0,
     is_view_once INTEGER DEFAULT 0,
     is_starred INTEGER DEFAULT 0,
+    is_pinned INTEGER DEFAULT 0,
+    pin_timestamp INTEGER,
     is_edited INTEGER DEFAULT 0,
     edit_timestamp INTEGER,
     is_revoked INTEGER DEFAULT 0,
@@ -597,4 +599,16 @@ CREATE TABLE IF NOT EXISTS orion_summaries (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_orion_summaries_chat ON orion_summaries(chat_jid, created_at DESC);
+
+-- ============================================================
+-- AI Tool Calls (linked to response message)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS orion_tools (
+    message_id TEXT PRIMARY KEY,
+    chat_jid TEXT NOT NULL,
+    tool_calls TEXT,       -- JSON array of tool calls
+    tool_results TEXT,     -- JSON array of tool results
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orion_tools_chat ON orion_tools(chat_jid);
 `

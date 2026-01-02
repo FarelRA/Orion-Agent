@@ -19,10 +19,16 @@
     ],
     "system_prompt": "You Orion Agent a helpful AI assistant on WhatsApp. Be concise and friendly.",
     "command_prefix": "/",
+    "max_message_age": 300,
     "triggers": {
       "dm_auto_respond": true,
       "group_mention_only": true,
-      "trigger_words": ["Orion", "Noiro", "Agent", "AI"]
+      "trigger_words": [
+        "Orion",
+        "Noiro",
+        "Agent",
+        "AI"
+      ]
     }
   }
 }

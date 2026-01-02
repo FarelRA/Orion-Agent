@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"go.mau.fi/whatsmeow/types"
 
@@ -64,15 +65,15 @@ func NewSendReplyTool(s *send.SendService) *SendReplyTool {
 func (t *SendReplyTool) Name() string { return "send_reply" }
 
 func (t *SendReplyTool) Description() string {
-	return "Send a reply to a specific message"
+	return "Send a reply to a specific message by index"
 }
 
 func (t *SendReplyTool) Parameters() json.RawMessage {
 	return tools.MustMarshal(tools.ParameterSchema{
 		Type: "object",
 		Properties: map[string]tools.PropertySchema{
-			"text":       {Type: "string", Description: "The reply text"},
-			"message_id": {Type: "string", Description: "ID of the message to reply to (optional, defaults to current message)"},
+			"text":          {Type: "string", Description: "The reply text"},
+			"message_index": {Type: "integer", Description: "Index of the message to reply to (optional, defaults to current message)"},
 		},
 		Required: []string{"text"},
 	})
@@ -80,16 +81,20 @@ func (t *SendReplyTool) Parameters() json.RawMessage {
 
 func (t *SendReplyTool) Execute(ctx context.Context, args json.RawMessage, execCtx *tools.ExecutionContext) (*tools.Result, error) {
 	var params struct {
-		Text      string `json:"text"`
-		MessageID string `json:"message_id"`
+		Text         string `json:"text"`
+		MessageIndex int    `json:"message_index"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tools.ErrorResult("invalid parameters"), nil
 	}
 
-	replyToID := params.MessageID
-	if replyToID == "" {
-		replyToID = execCtx.MessageID
+	replyToID := execCtx.MessageID
+	if params.MessageIndex > 0 {
+		if id, ok := execCtx.MessageMap[params.MessageIndex]; ok {
+			replyToID = id
+		} else {
+			return tools.ErrorResult(fmt.Sprintf("message index %d not found", params.MessageIndex)), nil
+		}
 	}
 
 	result, err := t.sendService.Reply(ctx, execCtx.ChatJID, types.MessageID(replyToID), execCtx.SenderJID, send.Text(params.Text))
@@ -112,30 +117,35 @@ func NewEditMessageTool(s *send.SendService) *EditMessageTool {
 func (t *EditMessageTool) Name() string { return "edit_message" }
 
 func (t *EditMessageTool) Description() string {
-	return "Edit a previously sent message (only your own messages)"
+	return "Edit a previously sent message by index (only your own messages)"
 }
 
 func (t *EditMessageTool) Parameters() json.RawMessage {
 	return tools.MustMarshal(tools.ParameterSchema{
 		Type: "object",
 		Properties: map[string]tools.PropertySchema{
-			"message_id": {Type: "string", Description: "ID of the message to edit"},
-			"new_text":   {Type: "string", Description: "The new text content"},
+			"message_index": {Type: "integer", Description: "Index of the message to edit"},
+			"new_text":      {Type: "string", Description: "The new text content"},
 		},
-		Required: []string{"message_id", "new_text"},
+		Required: []string{"message_index", "new_text"},
 	})
 }
 
 func (t *EditMessageTool) Execute(ctx context.Context, args json.RawMessage, execCtx *tools.ExecutionContext) (*tools.Result, error) {
 	var params struct {
-		MessageID string `json:"message_id"`
-		NewText   string `json:"new_text"`
+		MessageIndex int    `json:"message_index"`
+		NewText      string `json:"new_text"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tools.ErrorResult("invalid parameters"), nil
 	}
 
-	result, err := t.sendService.Edit(ctx, execCtx.ChatJID, types.MessageID(params.MessageID), params.NewText)
+	realMsgID, ok := execCtx.MessageMap[params.MessageIndex]
+	if !ok {
+		return tools.ErrorResult(fmt.Sprintf("message index %d not found", params.MessageIndex)), nil
+	}
+
+	result, err := t.sendService.Edit(ctx, execCtx.ChatJID, types.MessageID(realMsgID), params.NewText)
 	if err != nil {
 		return tools.ErrorResult(err.Error()), nil
 	}
@@ -155,28 +165,33 @@ func NewRevokeMessageTool(s *send.SendService) *RevokeMessageTool {
 func (t *RevokeMessageTool) Name() string { return "revoke_message" }
 
 func (t *RevokeMessageTool) Description() string {
-	return "Delete a message for everyone (revoke)"
+	return "Delete a message for everyone by index (revoke)"
 }
 
 func (t *RevokeMessageTool) Parameters() json.RawMessage {
 	return tools.MustMarshal(tools.ParameterSchema{
 		Type: "object",
 		Properties: map[string]tools.PropertySchema{
-			"message_id": {Type: "string", Description: "ID of the message to revoke"},
+			"message_index": {Type: "integer", Description: "Index of the message to revoke"},
 		},
-		Required: []string{"message_id"},
+		Required: []string{"message_index"},
 	})
 }
 
 func (t *RevokeMessageTool) Execute(ctx context.Context, args json.RawMessage, execCtx *tools.ExecutionContext) (*tools.Result, error) {
 	var params struct {
-		MessageID string `json:"message_id"`
+		MessageIndex int `json:"message_index"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tools.ErrorResult("invalid parameters"), nil
 	}
 
-	_, err := t.sendService.RevokeOwn(ctx, execCtx.ChatJID, types.MessageID(params.MessageID))
+	realMsgID, ok := execCtx.MessageMap[params.MessageIndex]
+	if !ok {
+		return tools.ErrorResult(fmt.Sprintf("message index %d not found", params.MessageIndex)), nil
+	}
+
+	_, err := t.sendService.RevokeOwn(ctx, execCtx.ChatJID, types.MessageID(realMsgID))
 	if err != nil {
 		return tools.ErrorResult(err.Error()), nil
 	}
@@ -197,5 +212,6 @@ var _ tools.Tool = (*SendReplyTool)(nil)
 var _ tools.Tool = (*EditMessageTool)(nil)
 var _ tools.Tool = (*RevokeMessageTool)(nil)
 
-// Ensure fmt is used
+// Ensure imports are used
 var _ = fmt.Sprintf
+var _ = strconv.Atoi

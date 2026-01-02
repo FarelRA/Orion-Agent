@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"orion-agent/internal/data/store"
 	"orion-agent/internal/utils"
 	"time"
 
@@ -124,6 +125,21 @@ func (s *SendService) SendPollVote(ctx context.Context, pollInfo *types.MessageI
 	resp, err := s.client.SendMessage(ctx, pollInfo.Chat, voteMsg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send poll vote: %w", err)
+	}
+
+	// Save vote to database
+	if s.polls != nil {
+		ownJID := s.utils.OwnJID()
+		vote := &store.PollVote{
+			MessageID:       string(pollInfo.ID),
+			ChatJID:         pollInfo.Chat,
+			VoterLID:        ownJID,
+			SelectedOptions: selectedOptions,
+			Timestamp:       resp.Timestamp,
+		}
+		if err := s.polls.SaveVote(vote); err != nil {
+			s.log.Warnf("Failed to save poll vote for message %s: %v", pollInfo.ID, err)
+		}
 	}
 
 	return &SendResult{

@@ -2,6 +2,7 @@ package context
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"go.mau.fi/whatsmeow/types"
@@ -10,23 +11,35 @@ import (
 	"orion-agent/internal/service/agent/llm"
 )
 
+// ContextResult holds the built context with index mapping.
+type ContextResult struct {
+	Messages   []llm.ChatMessage
+	TokenCount int
+	MessageMap map[int]string // index → real message ID
+	NextIndex  int            // for AI's response
+}
+
 // Builder builds conversation context from database.
 type Builder struct {
 	store        *store.Store
 	summaryStore *store.SummaryStore
+	toolStore    *store.ToolStore
+	agentName    string
 }
 
 // NewBuilder creates a new context builder.
-func NewBuilder(s *store.Store, sumStore *store.SummaryStore) *Builder {
+func NewBuilder(s *store.Store, sumStore *store.SummaryStore, toolStore *store.ToolStore, agentName string) *Builder {
 	return &Builder{
 		store:        s,
 		summaryStore: sumStore,
+		toolStore:    toolStore,
+		agentName:    agentName,
 	}
 }
 
 // BuildContext builds conversation context for a chat.
-// Returns messages formatted for LLM and total token count.
-func (b *Builder) BuildContext(chatJID types.JID, maxTokens int, ownJID types.JID) ([]llm.ChatMessage, int, error) {
+// Returns ContextResult with messages, token count, and index mapping.
+func (b *Builder) BuildContext(chatJID types.JID, maxTokens int, ownJID types.JID) (*ContextResult, error) {
 	// Get latest summary if exists
 	var summaryText string
 	var summaryTokens int
@@ -42,12 +55,19 @@ func (b *Builder) BuildContext(chatJID types.JID, maxTokens int, ownJID types.JI
 	// Get messages from DB (after last summarized message if exists)
 	messages, err := b.getMessagesAfter(chatJID, lastSummarizedMsgID, maxTokens-summaryTokens)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
-	// Convert to LLM messages
+	// Convert to LLM messages with index|sender|content format
 	var result []llm.ChatMessage
 	totalTokens := summaryTokens
+	messageMap := make(map[int]string)
+	index := 1
+
+	// User mapping state
+	userIndexMap := make(map[string]int)
+	nextUserIndex := 1
+	isDM := chatJID.Server == types.DefaultUserServer
 
 	// Add summary as system context if exists
 	if summaryText != "" {
@@ -57,24 +77,48 @@ func (b *Builder) BuildContext(chatJID types.JID, maxTokens int, ownJID types.JI
 		})
 	}
 
-	// Add messages
+	// Add messages with indexed format
 	for _, msg := range messages {
 		role := llm.RoleUser
 		if msg.FromMe {
 			role = llm.RoleAssistant
 		}
 
-		content := b.formatMessageContent(msg)
+		// Resolve sender name
+		senderName := b.resolveSenderName(msg, isDM, userIndexMap, &nextUserIndex)
+
+		// Format: {index}|{sender}|{content}
+		content := b.formatMessageContent(msg, index, senderName)
 		tokens := llm.EstimateTokens(content) + 4
+
+		// Store mapping
+		messageMap[index] = msg.ID
+
+		// Check if this message has associated tool calls
+		toolRecord, _ := b.toolStore.GetByMessageID(msg.ID)
+		if toolRecord != nil && msg.FromMe {
+			// Insert tool calls/results before the assistant response
+			toolMessages := b.formatToolMessages(toolRecord)
+			for _, tm := range toolMessages {
+				result = append(result, tm)
+				totalTokens += llm.EstimateTokens(tm.Content) + 4
+			}
+		}
 
 		result = append(result, llm.ChatMessage{
 			Role:    role,
 			Content: content,
 		})
 		totalTokens += tokens
+		index++
 	}
 
-	return result, totalTokens, nil
+	return &ContextResult{
+		Messages:   result,
+		TokenCount: totalTokens,
+		MessageMap: messageMap,
+		NextIndex:  index,
+	}, nil
 }
 
 // ContextMessage is a simplified message for context building.
@@ -86,23 +130,32 @@ type ContextMessage struct {
 	TextContent string
 	Caption     string
 	Timestamp   int64
+	SenderLID   string
+
+	// Contact info
+	FullName     string
+	FirstName    string
+	BusinessName string
 }
 
 // getMessagesAfter fetches messages after a given message ID.
 func (b *Builder) getMessagesAfter(chatJID types.JID, afterMsgID string, maxTokens int) ([]*ContextMessage, error) {
 	query := `
-		SELECT id, from_me, push_name, message_type, text_content, caption, timestamp
-		FROM orion_messages 
-		WHERE chat_jid = ? AND is_revoked = 0`
+		SELECT 
+			m.id, m.from_me, m.push_name, m.message_type, m.text_content, m.caption, m.timestamp, m.sender_lid,
+			c.full_name, c.first_name, c.business_name
+		FROM orion_messages m
+		LEFT JOIN orion_contacts c ON m.sender_lid = c.lid
+		WHERE m.chat_jid = ? AND m.is_revoked = 0`
 
 	args := []interface{}{chatJID.String()}
 
 	if afterMsgID != "" {
-		query += ` AND timestamp > (SELECT timestamp FROM orion_messages WHERE id = ? AND chat_jid = ?)`
+		query += ` AND m.timestamp > (SELECT timestamp FROM orion_messages WHERE id = ? AND chat_jid = ?)`
 		args = append(args, afterMsgID, chatJID.String())
 	}
 
-	query += ` ORDER BY timestamp ASC`
+	query += ` ORDER BY m.timestamp ASC`
 
 	rows, err := b.store.Query(query, args...)
 	if err != nil {
@@ -138,11 +191,13 @@ func (b *Builder) getMessagesAfter(chatJID types.JID, afterMsgID string, maxToke
 
 func (b *Builder) scanContextMessage(rows *sql.Rows) (*ContextMessage, error) {
 	var msg ContextMessage
-	var pushName, textContent, caption sql.NullString
+	var pushName, textContent, caption, senderLID sql.NullString
+	var fullName, firstName, businessName sql.NullString
 	var fromMe int
 
 	err := rows.Scan(
-		&msg.ID, &fromMe, &pushName, &msg.MessageType, &textContent, &caption, &msg.Timestamp,
+		&msg.ID, &fromMe, &pushName, &msg.MessageType, &textContent, &caption, &msg.Timestamp, &senderLID,
+		&fullName, &firstName, &businessName,
 	)
 	if err != nil {
 		return nil, err
@@ -152,37 +207,102 @@ func (b *Builder) scanContextMessage(rows *sql.Rows) (*ContextMessage, error) {
 	msg.PushName = pushName.String
 	msg.TextContent = textContent.String
 	msg.Caption = caption.String
+	msg.SenderLID = senderLID.String
+	msg.FullName = fullName.String
+	msg.FirstName = firstName.String
+	msg.BusinessName = businessName.String
 
 	return &msg, nil
 }
 
-// formatMessageContent formats a message for LLM context.
-func (b *Builder) formatMessageContent(msg *ContextMessage) string {
+// resolveSenderName determines the best name for the sender.
+func (b *Builder) resolveSenderName(msg *ContextMessage, isDM bool, userIndexMap map[string]int, nextUserIndex *int) string {
+	if msg.FromMe {
+		return b.agentName
+	}
+
+	// Order: Full Name > First Name > Push Name > Business Name
+	if msg.FullName != "" {
+		return msg.FullName
+	}
+	if msg.FirstName != "" {
+		return msg.FirstName
+	}
+	if msg.PushName != "" {
+		return msg.PushName
+	}
+	if msg.BusinessName != "" {
+		return msg.BusinessName
+	}
+
+	// Fallback
+	if isDM {
+		return "User"
+	}
+
+	// User{index} for groups/others
+	if msg.SenderLID == "" {
+		return "Unknown"
+	}
+
+	idx, exists := userIndexMap[msg.SenderLID]
+	if !exists {
+		idx = *nextUserIndex
+		userIndexMap[msg.SenderLID] = idx
+		*nextUserIndex++
+	}
+	return fmt.Sprintf("User%d", idx)
+}
+
+// formatMessageContent formats a message with index|sender|content format.
+func (b *Builder) formatMessageContent(msg *ContextMessage, index int, senderName string) string {
 	content := msg.TextContent
 	if content == "" {
 		content = msg.Caption
 	}
 	if content == "" {
-		content = fmt.Sprintf("[%s message]", msg.MessageType)
+		content = fmt.Sprintf("[%s]", msg.MessageType)
 	}
 
-	// Add sender name for group context
-	if !msg.FromMe && msg.PushName != "" {
-		content = fmt.Sprintf("%s: %s", msg.PushName, content)
+	// Format: {index}|{sender}|{content}
+	return fmt.Sprintf("%d|%s|%s", index, senderName, content)
+}
+
+// formatToolMessages formats tool call/result as LLM messages.
+func (b *Builder) formatToolMessages(record *store.ToolRecord) []llm.ChatMessage {
+	var messages []llm.ChatMessage
+
+	// Add tool calls
+	if len(record.ToolCalls) > 0 {
+		messages = append(messages, llm.ChatMessage{
+			Role:    llm.RoleTool,
+			Content: string(record.ToolCalls),
+		})
 	}
 
-	return content
+	// Add tool results
+	if len(record.ToolResults) > 0 {
+		messages = append(messages, llm.ChatMessage{
+			Role:    llm.RoleTool,
+			Content: string(record.ToolResults),
+		})
+	}
+
+	return messages
 }
 
 // GetMessagesForSummary gets messages between two message IDs for summarization.
 func (b *Builder) GetMessagesForSummary(chatJID types.JID, fromMsgID, toMsgID string) ([]*ContextMessage, error) {
 	query := `
-		SELECT id, from_me, push_name, message_type, text_content, caption, timestamp
-		FROM orion_messages 
-		WHERE chat_jid = ? AND is_revoked = 0
-		AND timestamp >= (SELECT timestamp FROM orion_messages WHERE id = ? AND chat_jid = ?)
-		AND timestamp <= (SELECT timestamp FROM orion_messages WHERE id = ? AND chat_jid = ?)
-		ORDER BY timestamp ASC`
+		SELECT 
+			m.id, m.from_me, m.push_name, m.message_type, m.text_content, m.caption, m.timestamp, m.sender_lid,
+			c.full_name, c.first_name, c.business_name
+		FROM orion_messages m
+		LEFT JOIN orion_contacts c ON m.sender_lid = c.lid
+		WHERE m.chat_jid = ? AND m.is_revoked = 0
+		AND m.timestamp >= (SELECT timestamp FROM orion_messages WHERE id = ? AND chat_jid = ?)
+		AND m.timestamp <= (SELECT timestamp FROM orion_messages WHERE id = ? AND chat_jid = ?)
+		ORDER BY m.timestamp ASC`
 
 	rows, err := b.store.Query(query, chatJID.String(), fromMsgID, chatJID.String(), toMsgID, chatJID.String())
 	if err != nil {
@@ -200,4 +320,19 @@ func (b *Builder) GetMessagesForSummary(chatJID types.JID, fromMsgID, toMsgID st
 	}
 
 	return messages, nil
+}
+
+// ToolCallData represents a tool call for JSON serialization.
+type ToolCallData struct {
+	ID   string          `json:"id"`
+	Tool string          `json:"tool"`
+	Args json.RawMessage `json:"args"`
+}
+
+// ToolResultData represents a tool result for JSON serialization.
+type ToolResultData struct {
+	ToolCallID string `json:"tool_call_id"`
+	Success    bool   `json:"success"`
+	Data       any    `json:"data,omitempty"`
+	Error      string `json:"error,omitempty"`
 }

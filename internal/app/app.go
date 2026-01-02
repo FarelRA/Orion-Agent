@@ -22,14 +22,14 @@ import (
 
 // App is the main application orchestrator.
 type App struct {
-	Config      *config.Config
-	Log         *logger.Logger
-	Store       *store.Store
-	Client      *Client
-	Dispatcher  *event.Dispatcher
-	JIDService  *utils.Utils
-	SyncService *sync.SyncService
-	SendService *send.SendService
+	Config       *config.Config
+	Log          *logger.Logger
+	Store        *store.Store
+	Client       *Client
+	Dispatcher   *event.Dispatcher
+	JIDService   *utils.Utils
+	SyncService  *sync.SyncService
+	SendService  *send.SendService
 	AgentService *agent.Service
 
 	// Sub-stores for convenience
@@ -107,10 +107,13 @@ func New(cfg *config.Config) (*App, error) {
 	)
 
 	// Create send service
-	sendService := send.NewSendService(waClient.Underlying(), appUtils, messageStore, log)
+	sendService := send.NewSendService(waClient.Underlying(), appUtils, messageStore, reactionStore, pollStore, log)
+
+	// Create tool store
+	toolStore := store.NewToolStore(appStore.DB())
 
 	// Create agent service
-	agentService := agent.NewService(cfg, appStore, settingsStore, summaryStore, sendService, log)
+	agentService := agent.NewService(cfg, appStore, settingsStore, summaryStore, toolStore, sendService, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 

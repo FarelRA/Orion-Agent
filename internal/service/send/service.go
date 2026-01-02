@@ -14,19 +14,23 @@ import (
 
 // SendService provides a high-level API for sending messages via WhatsApp.
 type SendService struct {
-	client   *whatsmeow.Client
-	utils    *utils.Utils
-	messages *store.MessageStore
-	log      waLog.Logger
+	client    *whatsmeow.Client
+	utils     *utils.Utils
+	messages  *store.MessageStore
+	reactions *store.ReactionStore
+	polls     *store.PollStore
+	log       waLog.Logger
 }
 
 // NewSendService creates a new SendService.
-func NewSendService(client *whatsmeow.Client, utils *utils.Utils, messages *store.MessageStore, log waLog.Logger) *SendService {
+func NewSendService(client *whatsmeow.Client, utils *utils.Utils, messages *store.MessageStore, reactions *store.ReactionStore, polls *store.PollStore, log waLog.Logger) *SendService {
 	return &SendService{
-		client:   client,
-		utils:    utils,
-		messages: messages,
-		log:      log.Sub("SendService"),
+		client:    client,
+		utils:     utils,
+		messages:  messages,
+		reactions: reactions,
+		polls:     polls,
+		log:       log.Sub("SendService"),
 	}
 }
 
@@ -133,6 +137,7 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 		msg.Width = int(c.Width)
 		msg.Height = int(c.Height)
 		msg.IsViewOnce = c.ViewOnce
+		msg.Thumbnail = c.ThumbnailJPEG
 		if c.uploaded != nil {
 			msg.MediaURL = c.uploaded.URL
 			msg.MediaDirectPath = c.uploaded.DirectPath
@@ -149,6 +154,7 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 		msg.DurationSeconds = int(c.DurationSeconds)
 		msg.IsViewOnce = c.ViewOnce
 		msg.IsGIF = c.GifPlayback
+		msg.Thumbnail = c.ThumbnailJPEG
 		if c.uploaded != nil {
 			msg.MediaURL = c.uploaded.URL
 			msg.MediaDirectPath = c.uploaded.DirectPath
@@ -175,6 +181,7 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 	case *DocumentContent:
 		msg.Mimetype = c.MimeType
 		msg.DisplayName = c.Filename
+		msg.Thumbnail = c.ThumbnailJPEG
 		if c.uploaded != nil {
 			msg.MediaURL = c.uploaded.URL
 			msg.MediaDirectPath = c.uploaded.DirectPath
@@ -204,6 +211,7 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 		msg.LocationName = c.Name
 		msg.LocationAddress = c.Address
 		msg.LocationURL = c.URL
+		msg.TextContent = c.Comment // Store comment in text_content
 
 	case *LiveLocationContent:
 		msg.Latitude = c.Latitude

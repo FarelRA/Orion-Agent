@@ -99,9 +99,9 @@ type Message struct {
 	PreviewMatchedText string
 
 	// Group invite
-	InviteGroupJID    types.JID
-	InviteCode        string
-	InviteExpiration  int64
+	InviteGroupJID   types.JID
+	InviteCode       string
+	InviteExpiration int64
 
 	// Event
 	EventName        string
@@ -117,6 +117,8 @@ type Message struct {
 	IsEphemeral      bool
 	IsViewOnce       bool
 	IsStarred        bool
+	IsPinned         bool
+	PinTimestamp     time.Time
 	IsEdited         bool
 	EditTimestamp    time.Time
 	IsRevoked        bool
@@ -305,6 +307,17 @@ func (s *MessageStore) MarkEdited(id string, chatJID types.JID, newContent strin
 		UPDATE orion_messages SET text_content = ?, is_edited = 1, edit_timestamp = ?
 		WHERE id = ? AND chat_jid = ?
 	`, newContent, editTime.Unix(), id, chatJID.String())
+	return err
+}
+
+// SetPinned updates pinned status.
+func (s *MessageStore) SetPinned(id string, chatJID types.JID, pinned bool, pinTime time.Time) error {
+	var pinTs interface{}
+	if pinned {
+		pinTs = pinTime.Unix()
+	}
+	_, err := s.store.Exec(`UPDATE orion_messages SET is_pinned = ?, pin_timestamp = ? WHERE id = ? AND chat_jid = ?`,
+		boolToInt(pinned), pinTs, id, chatJID.String())
 	return err
 }
 
