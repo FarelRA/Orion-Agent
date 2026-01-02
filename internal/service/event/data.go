@@ -738,18 +738,35 @@ func (h *DataHandler) OnHistorySync(evt *events.HistorySync) {
 		}
 	}
 
-	// Save messages - normalize JIDs
+	// Save messages - normalize JIDs, infer sender if missing
+	savedMsgs := 0
 	for _, msg := range data.Messages {
 		msg.ChatJID = h.utils.NormalizeJID(h.ctx, msg.ChatJID)
 		msg.SenderLID = h.utils.NormalizeJID(h.ctx, msg.SenderLID)
 		msg.QuotedSenderLID = h.utils.NormalizeJID(h.ctx, msg.QuotedSenderLID)
+		
+		// Infer sender if missing
+		if msg.SenderLID.IsEmpty() {
+			if msg.FromMe {
+				msg.SenderLID = h.utils.OwnJID()
+			} else if msg.ChatJID.Server == "s.whatsapp.net" || msg.ChatJID.Server == "lid" {
+				// DM chat - sender is the chat JID
+				msg.SenderLID = msg.ChatJID
+			} else {
+				// Group without sender - skip
+				continue
+			}
+		}
+		
 		if err := h.messages.Put(msg); err != nil {
 			h.log.Errorf("Failed to save message: %v", err)
+		} else {
+			savedMsgs++
 		}
 	}
 
 	h.log.Infof("History sync: saved %d chats, %d groups, %d contacts, %d messages",
-		len(data.Chats), len(data.Groups), len(data.Contacts), len(data.Messages))
+		len(data.Chats), len(data.Groups), len(data.Contacts), savedMsgs)
 }
 
 // OnAppStateSyncComplete handles app state sync completion.

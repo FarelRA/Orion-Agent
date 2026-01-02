@@ -6,13 +6,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.mau.fi/whatsmeow/types/events"
 
 	"orion-agent/internal/data/store"
 	"orion-agent/internal/infra/config"
 	"orion-agent/internal/infra/logger"
+	"orion-agent/internal/service/agent"
 	"orion-agent/internal/service/event"
+	"orion-agent/internal/service/send"
 	"orion-agent/internal/service/sync"
 	"orion-agent/internal/utils"
 )
@@ -26,6 +29,8 @@ type App struct {
 	Dispatcher  *event.Dispatcher
 	JIDService  *utils.Utils
 	SyncService *sync.SyncService
+	SendService *send.SendService
+	AgentService *agent.Service
 
 	// Sub-stores for convenience
 	ContactStore *store.ContactStore
@@ -68,6 +73,8 @@ func New(cfg *config.Config) (*App, error) {
 	callStore := store.NewCallStore(appStore)
 	pollStore := store.NewPollStore(appStore)
 	labelStore := store.NewLabelStore(appStore)
+	summaryStore := store.NewSummaryStore(appStore)
+	settingsStore := store.NewSettingsStore(appStore, cfg)
 
 	// Create client
 	waClient, err := NewClient(cfg, appStore, log)
@@ -99,6 +106,12 @@ func New(cfg *config.Config) (*App, error) {
 		log,
 	)
 
+	// Create send service
+	sendService := send.NewSendService(waClient.Underlying(), appUtils, messageStore, log)
+
+	// Create agent service
+	agentService := agent.NewService(cfg, appStore, settingsStore, summaryStore, sendService, log)
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	app := &App{
@@ -109,6 +122,8 @@ func New(cfg *config.Config) (*App, error) {
 		Dispatcher:   dispatcher,
 		JIDService:   appUtils,
 		SyncService:  syncService,
+		SendService:  sendService,
+		AgentService: agentService,
 		ContactStore: contactStore,
 		ChatStore:    chatStore,
 		MessageStore: messageStore,
@@ -151,21 +166,28 @@ func New(cfg *config.Config) (*App, error) {
 func (a *App) Run() error {
 	a.Log.Infof("Starting Orion Agent...")
 
-	// Handle signals
+	// Setup signal handling to cancel context
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigChan
+		a.Log.Infof("Received %v, initiating shutdown...", sig)
+		a.cancel()
+	}()
 
-	// Connect
+	// Connect (respects context cancellation)
 	if err := a.connect(); err != nil {
+		if a.ctx.Err() != nil {
+			a.Log.Infof("Shutdown during startup")
+			return a.Shutdown()
+		}
 		return err
 	}
 
 	a.Log.Infof("Orion Agent is running. Press Ctrl+C to stop.")
 
-	// Wait for signal
-	<-sigChan
-	a.Log.Infof("Shutting down...")
-
+	// Wait for context cancellation
+	<-a.ctx.Done()
 	return a.Shutdown()
 }
 
@@ -189,9 +211,9 @@ func (a *App) connect() error {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 
-	// Handle QR
+	// Handle QR with context
 	qrHandler := NewQRHandler(a.Log)
-	return qrHandler.HandleQRChannel(qrChan)
+	return qrHandler.HandleQRChannel(a.ctx, qrChan)
 }
 
 // handleEvent is the main event handler that routes events to services.
@@ -200,16 +222,72 @@ func (a *App) handleEvent(evt interface{}) {
 	switch e := evt.(type) {
 	case *events.Connected:
 		a.Log.Infof("Connected to WhatsApp")
+		// Set own JID for agent
+		if a.Client.Underlying().Store.ID != nil {
+			a.AgentService.SetOwnJID(*a.Client.Underlying().Store.ID)
+		}
 
 	case *events.PairSuccess:
 		a.Log.Infof("Paired successfully as %s", e.ID)
 		a.JIDService.StoreMappingFromEvent(e.ID, e.LID)
+		a.AgentService.SetOwnJID(e.ID)
+
+	case *events.Message:
+		// Process through agent after persistence
+		go a.processAgentMessage(e)
 	}
 
 	// Route to event dispatcher for persistence
 	a.Dispatcher.Handle(evt)
 	// Route to sync service for coalescence
 	a.SyncService.Handle(evt)
+}
+
+// processAgentMessage processes a message through the AI agent.
+func (a *App) processAgentMessage(e *events.Message) {
+	// Skip if from self
+	if e.Info.IsFromMe {
+		return
+	}
+
+	// Skip old/history messages based on config (0 = no limit)
+	maxAge := a.Config.AI.MaxMessageAge
+	if maxAge > 0 && time.Since(e.Info.Timestamp) > time.Duration(maxAge)*time.Second {
+		return
+	}
+
+	// Extract text content
+	text := ""
+	if e.Message.GetConversation() != "" {
+		text = e.Message.GetConversation()
+	} else if ext := e.Message.GetExtendedTextMessage(); ext != nil {
+		text = ext.GetText()
+	}
+
+	// Skip empty messages
+	if text == "" {
+		return
+	}
+
+	// Extract mentioned JIDs
+	var mentionedJIDs []string
+	if ext := e.Message.GetExtendedTextMessage(); ext != nil && ext.ContextInfo != nil {
+		mentionedJIDs = ext.ContextInfo.MentionedJID
+	}
+
+	// Process through agent
+	err := a.AgentService.ProcessMessage(
+		a.ctx,
+		e.Info.Chat,
+		e.Info.Sender,
+		e.Info.ID,
+		text,
+		mentionedJIDs,
+		e.Info.IsFromMe,
+	)
+	if err != nil {
+		a.Log.Warnf("Agent processing failed: %v", err)
+	}
 }
 
 // Shutdown gracefully shuts down the application.

@@ -62,6 +62,9 @@ func MessageFromEvent(evt *events.Message) *store.Message {
 	// Extract event message data
 	extractEventMessage(evt.Message, msg)
 
+	// Extract group invite data
+	extractGroupInvite(evt.Message, msg)
+
 	// Extract interactive message data (buttons, lists, etc.)
 	extractInteractive(evt.Message, msg)
 
@@ -80,9 +83,17 @@ func extractTextContent(msg *waE2E.Message, m *store.Message) {
 		return
 	}
 
-	// Extended text message
+	// Extended text message with link preview
 	if ext := msg.GetExtendedTextMessage(); ext != nil {
 		m.TextContent = ext.GetText()
+		// Extract link preview
+		m.PreviewTitle = ext.GetTitle()
+		m.PreviewDescription = ext.GetDescription()
+		m.PreviewMatchedText = ext.GetMatchedText()
+		m.PreviewURL = ext.GetMatchedText() // URL is in MatchedText
+		if m.Thumbnail == nil {
+			m.Thumbnail = ext.GetJPEGThumbnail()
+		}
 		return
 	}
 
@@ -625,19 +636,15 @@ func extractLocation(msg *waE2E.Message, m *store.Message) {
 func extractContactCard(msg *waE2E.Message, m *store.Message) {
 	if contact := msg.GetContactMessage(); contact != nil {
 		m.DisplayName = contact.GetDisplayName()
-		m.VCard = contact.GetVcard()
+		m.VCards = []string{contact.GetVcard()}
 		return
 	}
 
-	// For contacts array, we get the display name from the array
+	// For contacts array, store each vCard separately
 	if contacts := msg.GetContactsArrayMessage(); contacts != nil {
 		m.DisplayName = contacts.GetDisplayName()
-		// The VCard field will contain all vcards concatenated
 		for _, c := range contacts.GetContacts() {
-			if m.VCard != "" {
-				m.VCard += "\n---\n"
-			}
-			m.VCard += c.GetVcard()
+			m.VCards = append(m.VCards, c.GetVcard())
 		}
 	}
 }
@@ -673,7 +680,14 @@ func extractEventMessage(msg *waE2E.Message, m *store.Message) {
 		return
 	}
 
-	// Store event details in text content as structured data
+	m.EventName = event.GetName()
+	m.EventDescription = event.GetDescription()
+	m.EventStartTime = event.GetStartTime()
+	m.EventEndTime = event.GetEndTime()
+	m.EventJoinLink = event.GetJoinLink()
+	m.EventIsCanceled = event.GetIsCanceled()
+
+	// Also store in text fields for compatibility
 	m.TextContent = event.GetName()
 	m.Caption = event.GetDescription()
 
@@ -684,6 +698,23 @@ func extractEventMessage(msg *waE2E.Message, m *store.Message) {
 		m.LocationName = loc.GetName()
 		m.LocationAddress = loc.GetAddress()
 	}
+}
+
+// extractGroupInvite extracts group invite message details.
+func extractGroupInvite(msg *waE2E.Message, m *store.Message) {
+	invite := msg.GetGroupInviteMessage()
+	if invite == nil {
+		return
+	}
+
+	if jidStr := invite.GetGroupJID(); jidStr != "" {
+		m.InviteGroupJID, _ = types.ParseJID(jidStr)
+	}
+	m.InviteCode = invite.GetInviteCode()
+	m.InviteExpiration = invite.GetInviteExpiration()
+	m.DisplayName = invite.GetGroupName()
+	m.Caption = invite.GetCaption()
+	m.Thumbnail = invite.GetJPEGThumbnail()
 }
 
 // extractInteractive extracts interactive message components.

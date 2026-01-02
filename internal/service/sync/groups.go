@@ -16,33 +16,37 @@ import (
 
 // SyncAllGroups fetches all joined groups using GetJoinedGroups.
 func (s *SyncService) SyncAllGroups(ctx context.Context) error {
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.log.Debugf("Syncing all groups")
 
 	groups, err := s.client.GetJoinedGroups(ctx)
-	if err != nil || groups == nil {
+	if err != nil {
 		s.log.Errorf("Failed to get joined groups: %v", err)
-		return err // Not found is ERROR
+		return err
+	}
+	if groups == nil {
+		return nil
 	}
 
 	for _, g := range groups {
-		// Normalize JID
+		if g == nil {
+			continue
+		}
 		g.JID = s.utils.NormalizeJID(ctx, g.JID)
 		g.OwnerJID = s.utils.NormalizeJID(ctx, g.OwnerJID)
 		g.NameSetBy = s.utils.NormalizeJID(ctx, g.NameSetBy)
 		g.TopicSetBy = s.utils.NormalizeJID(ctx, g.TopicSetBy)
 
-		// Convert to store group
 		group := groupInfoToStore(g)
 
-		// Save group
 		if err := s.groups.Put(group); err != nil {
 			s.log.Warnf("Failed to save group %s: %v", g.JID, err)
 			continue
 		}
 
-		// Save participants
 		for _, p := range g.Participants {
-			// Normalize JID
 			p.JID = s.utils.NormalizeJID(ctx, p.JID)
 
 			participant := &store.GroupParticipant{
@@ -67,16 +71,25 @@ func (s *SyncService) SyncAllGroups(ctx context.Context) error {
 
 // SyncGroupInfo fetches full group info using GetGroupInfo.
 func (s *SyncService) SyncGroupInfo(ctx context.Context, jid types.JID) error {
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// Only handle actual groups, not broadcasts
+	if jid.Server != types.GroupServer {
+		return nil
+	}
 	s.log.Debugf("Syncing group info for %s", jid)
 
 	jid = s.utils.NormalizeJID(ctx, jid)
 	info, err := s.client.GetGroupInfo(ctx, jid)
-	if err != nil || info == nil {
+	if err != nil {
 		s.log.Errorf("Failed to get group info for %s: %v", jid, err)
-		return err // Not found is ERROR
+		return err
+	}
+	if info == nil {
+		return nil
 	}
 
-	// Normalize JID
 	info.JID = s.utils.NormalizeJID(ctx, info.JID)
 	info.OwnerJID = s.utils.NormalizeJID(ctx, info.OwnerJID)
 	info.NameSetBy = s.utils.NormalizeJID(ctx, info.NameSetBy)
@@ -88,9 +101,7 @@ func (s *SyncService) SyncGroupInfo(ctx context.Context, jid types.JID) error {
 		return err
 	}
 
-	// Save participants
 	for _, p := range info.Participants {
-		// Normalize JID
 		p.JID = s.utils.NormalizeJID(ctx, p.JID)
 
 		participant := &store.GroupParticipant{
@@ -114,6 +125,12 @@ func (s *SyncService) SyncGroupInfo(ctx context.Context, jid types.JID) error {
 
 // SyncGroupInviteLink fetches group invite link.
 func (s *SyncService) SyncGroupInviteLink(ctx context.Context, jid types.JID) error {
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if jid.Server != types.GroupServer {
+		return nil
+	}
 	s.log.Debugf("Syncing invite link for %s", jid)
 
 	jid = s.utils.NormalizeJID(ctx, jid)
@@ -135,36 +152,63 @@ func (s *SyncService) SyncGroupInviteLink(ctx context.Context, jid types.JID) er
 }
 
 // SyncGroupPicture fetches group profile picture.
-func (s *SyncService) SyncGroupPicture(ctx context.Context, jid types.JID) error {
-	s.log.Debugf("Syncing profile picture for %s", jid)
+// Called when: new group, picture changed event, or explicit refresh.
+func (s *SyncService) SyncGroupPicture(ctx context.Context, jid types.JID, isCommunity bool) error {
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if jid.Server != types.GroupServer {
+		return nil
+	}
+	s.log.Debugf("Syncing group picture for %s", jid)
 
 	jid = s.utils.NormalizeJID(ctx, jid)
-	pic, err := s.client.GetProfilePictureInfo(ctx, jid, &whatsmeow.GetProfilePictureParams{})
+
+	existingID := ""
+	if group, err := s.groups.Get(jid); err == nil && group != nil {
+		existingID = group.ProfilePicID
+	}
+
+	params := &whatsmeow.GetProfilePictureParams{
+		Preview:     false,
+		ExistingID:  existingID,
+		IsCommunity: isCommunity,
+	}
+
+	pic, err := s.client.GetProfilePictureInfo(ctx, jid, params)
 	if err != nil || pic == nil {
-		s.log.Errorf("Failed to get profile picture for %s: %v", jid, err)
-		return nil // Not found is OK
+		s.log.Debugf("No group picture for %s: %v", jid, err)
+		// Mark as attempted with "0"
+		s.groups.UpdateProfilePic(jid, "0", "")
+		return nil
 	}
 
 	if err := s.groups.UpdateProfilePic(jid, pic.ID, pic.URL); err != nil {
-		s.log.Errorf("Failed to update profile picture for %s: %v", jid, err)
+		s.log.Errorf("Failed to update group picture for %s: %v", jid, err)
 		return err
 	}
 
-	s.log.Infof("Synced profile picture for %s", jid)
+	s.log.Infof("Synced group picture for %s", jid)
 	s.recordSync("group_picture")
 	return nil
 }
 
 // SyncGroupFromLink fetches group info from invite link.
 func (s *SyncService) SyncGroupFromLink(ctx context.Context, code string) (*types.GroupInfo, error) {
+	if s.client == nil || ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	s.log.Debugf("Syncing group from link %s", code)
+
 	info, err := s.client.GetGroupInfoFromLink(ctx, code)
-	if err != nil || info == nil {
+	if err != nil {
 		s.log.Errorf("Failed to get group info from link %s: %v", code, err)
 		return nil, err
 	}
+	if info == nil {
+		return nil, nil
+	}
 
-	// Normalize JID
 	info.JID = s.utils.NormalizeJID(ctx, info.JID)
 	info.OwnerJID = s.utils.NormalizeJID(ctx, info.OwnerJID)
 	info.NameSetBy = s.utils.NormalizeJID(ctx, info.NameSetBy)
@@ -181,28 +225,44 @@ func (s *SyncService) SyncGroupFromLink(ctx context.Context, code string) (*type
 	return info, nil
 }
 
-// SyncAllGroupPictures syncs profile pictures for all groups.
+// SyncAllGroupPictures syncs profile pictures for groups without picture ID.
 func (s *SyncService) SyncAllGroupPictures(ctx context.Context) error {
-	s.log.Debugf("Syncing all group pictures")
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
+	s.log.Debugf("Syncing group pictures (missing only)")
+
 	groups, err := s.groups.GetAll()
 	if err != nil || groups == nil {
 		s.log.Errorf("Failed to get all groups: %v", err)
-		return err // Not found is OK
+		return err
 	}
 
 	synced := 0
+	skipped := 0
 	for _, group := range groups {
-		// Normalize JID
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Skip if already attempted (has any ProfilePicID including "0")
+		if group.ProfilePicID != "" {
+			skipped++
+			continue
+		}
+
 		group.JID = s.utils.NormalizeJID(ctx, group.JID)
 
-		if err := s.SyncGroupPicture(ctx, group.JID); err != nil {
+		if err := s.SyncGroupPicture(ctx, group.JID, group.IsCommunity); err != nil {
 			s.log.Warnf("Failed to sync group picture for %s: %v", group.JID, err)
 		} else {
 			synced++
 		}
 	}
 
-	s.log.Infof("Synced %d/%d group pictures", synced, len(groups))
+	s.log.Infof("Synced %d group pictures, skipped %d", synced, skipped)
 	s.recordSync("group_pictures")
 	return nil
 }
@@ -210,7 +270,6 @@ func (s *SyncService) SyncAllGroupPictures(ctx context.Context) error {
 // Helper functions
 
 func groupInfoToStore(g *types.GroupInfo) *store.Group {
-	// Convert to store group
 	group := &store.Group{
 		JID:               g.JID,
 		Name:              g.Name,
@@ -242,7 +301,6 @@ func groupInfoToStore(g *types.GroupInfo) *store.Group {
 }
 
 func extractInviteCode(link string) string {
-	// Link format: https://chat.whatsapp.com/XXXX
 	if len(link) > 24 {
 		return link[len(link)-22:]
 	}

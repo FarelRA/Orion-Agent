@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -57,6 +58,21 @@ func (c *ContactContent) MediaType() utils.Type {
 	return "" // Not a media message
 }
 
+// MessageType implements Content.
+func (c *ContactContent) MessageType() string { return "contact" }
+
+// TextContent implements Content.
+func (c *ContactContent) TextContent() string { return c.DisplayName }
+
+// Caption implements Content.
+func (c *ContactContent) GetCaption() string { return "" }
+
+// GetMentionedJIDs implements Content.
+func (c *ContactContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (c *ContactContent) GetContextInfo() *ContextInfo { return c.ContextInfo }
+
 // ContactsArrayContent represents a multi-contact message.
 type ContactsArrayContent struct {
 	DisplayName string
@@ -104,6 +120,21 @@ func (c *ContactsArrayContent) ToMessage() (*waE2E.Message, error) {
 func (c *ContactsArrayContent) MediaType() utils.Type {
 	return "" // Not a media message
 }
+
+// MessageType implements Content.
+func (c *ContactsArrayContent) MessageType() string { return "contacts" }
+
+// TextContent implements Content.
+func (c *ContactsArrayContent) TextContent() string { return c.DisplayName }
+
+// Caption implements Content.
+func (c *ContactsArrayContent) GetCaption() string { return "" }
+
+// GetMentionedJIDs implements Content.
+func (c *ContactsArrayContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (c *ContactsArrayContent) GetContextInfo() *ContextInfo { return c.ContextInfo }
 
 // VCardBuilder helps build vCard format strings.
 type VCardBuilder struct {

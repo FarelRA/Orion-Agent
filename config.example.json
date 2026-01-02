@@ -1,0 +1,28 @@
+{
+  "log_level": "INFO",
+  "store_path": "~/.orion/store",
+  "device_name": "Orion Agent",
+  "sync_on_connect": true,
+  "sync_interval_mins": 30,
+  "history_sync_pages": 10,
+  "ai": {
+    "enabled": false,
+    "default_model": "default",
+    "models": [
+      {
+        "name": "default",
+        "api_key": "YOUR_API_KEY_HERE",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o",
+        "max_context": 128000
+      }
+    ],
+    "system_prompt": "You Orion Agent a helpful AI assistant on WhatsApp. Be concise and friendly.",
+    "command_prefix": "/",
+    "triggers": {
+      "dm_auto_respond": true,
+      "group_mention_only": true,
+      "trigger_words": ["Orion", "Noiro", "Agent", "AI"]
+    }
+  }
+}

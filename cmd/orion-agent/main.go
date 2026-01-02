@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -9,8 +10,12 @@ import (
 )
 
 func main() {
+	// Parse flags
+	configPath := flag.String("config", "config.json", "Path to config file")
+	flag.Parse()
+
 	// Load configuration
-	cfg := config.Load()
+	cfg := config.Load(*configPath)
 
 	// Create and run app
 	application, err := app.New(cfg)

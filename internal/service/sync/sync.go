@@ -84,51 +84,74 @@ func (s *SyncService) Handle(evt interface{}) {
 
 // FullSync performs a complete sync of all data types.
 func (s *SyncService) FullSync(ctx context.Context) error {
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.log.Infof("Starting full sync...")
 	start := time.Now()
 
 	var errors []error
 
-	// Sync groups
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := s.SyncAllGroups(ctx); err != nil {
 		s.log.Warnf("Failed to sync groups: %v", err)
 		errors = append(errors, err)
 	}
 
-	// Sync blocklist
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := s.SyncBlocklist(ctx); err != nil {
 		s.log.Warnf("Failed to sync blocklist: %v", err)
 		errors = append(errors, err)
 	}
 
-	// Sync privacy settings
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := s.SyncPrivacySettings(ctx); err != nil {
 		s.log.Warnf("Failed to sync privacy: %v", err)
 		errors = append(errors, err)
 	}
 
-	// Sync newsletters
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := s.SyncAllNewsletters(ctx); err != nil {
 		s.log.Warnf("Failed to sync newsletters: %v", err)
 		errors = append(errors, err)
 	}
 
-	// Sync all contact pictures
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := s.SyncAllContactPictures(ctx); err != nil {
 		s.log.Warnf("Failed to sync contact pictures: %v", err)
 		errors = append(errors, err)
 	}
 
-	// Sync all group pictures
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := s.SyncAllGroupPictures(ctx); err != nil {
 		s.log.Warnf("Failed to sync group pictures: %v", err)
+		errors = append(errors, err)
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := s.SyncAllNewsletterPictures(ctx); err != nil {
+		s.log.Warnf("Failed to sync newsletter pictures: %v", err)
 		errors = append(errors, err)
 	}
 
 	s.log.Infof("Full sync completed in %v", time.Since(start))
 
 	if len(errors) > 0 {
-		return errors[0] // Return first error
+		return errors[0]
 	}
 	return nil
 }

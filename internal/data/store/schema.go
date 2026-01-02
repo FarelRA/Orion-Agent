@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS orion_messages (
     live_location_sequence INTEGER,
     
     -- Contact (if contact message)
-    vcard TEXT,
+    vcards TEXT,
     display_name TEXT,
     
     -- Poll (if poll message)
@@ -186,6 +186,25 @@ CREATE TABLE IF NOT EXISTS orion_messages (
     poll_options TEXT,
     poll_select_max INTEGER,
     poll_encryption_key BLOB,
+    
+    -- Link preview (extended text)
+    preview_title TEXT,
+    preview_description TEXT,
+    preview_url TEXT,
+    preview_matched_text TEXT,
+    
+    -- Group invite
+    invite_group_jid TEXT,
+    invite_code TEXT,
+    invite_expiration INTEGER,
+    
+    -- Event
+    event_name TEXT,
+    event_description TEXT,
+    event_start_time INTEGER,
+    event_end_time INTEGER,
+    event_join_link TEXT,
+    event_is_canceled INTEGER DEFAULT 0,
     
     -- Flags
     is_broadcast INTEGER DEFAULT 0,
@@ -462,9 +481,9 @@ CREATE TABLE IF NOT EXISTS orion_label_associations (
     label_id TEXT NOT NULL,
     target_type TEXT NOT NULL,
     target_jid TEXT NOT NULL,
-    message_id TEXT,
+    message_id TEXT DEFAULT '',
     timestamp INTEGER NOT NULL,
-    PRIMARY KEY (label_id, target_type, target_jid, COALESCE(message_id, ''))
+    PRIMARY KEY (label_id, target_type, target_jid, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_orion_label_assoc_target ON orion_label_associations(target_jid);
 
@@ -564,4 +583,18 @@ CREATE TABLE IF NOT EXISTS orion_bots (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- ============================================================
+-- AI Conversation Summaries
+-- ============================================================
+CREATE TABLE IF NOT EXISTS orion_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_jid TEXT NOT NULL,
+    summary_text TEXT NOT NULL,
+    token_count INTEGER NOT NULL,
+    from_message_id TEXT NOT NULL,
+    to_message_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orion_summaries_chat ON orion_summaries(chat_jid, created_at DESC);
 `

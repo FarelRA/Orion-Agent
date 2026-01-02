@@ -12,10 +12,13 @@ import (
 
 // SyncPrivacySettings fetches privacy settings and saves to database.
 func (s *SyncService) SyncPrivacySettings(ctx context.Context) error {
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.log.Debugf("Syncing privacy settings")
+
 	settings := s.client.GetPrivacySettings(ctx)
 
-	// Save to database
 	privacySettings := &store.PrivacySettings{
 		GroupAdd:     string(settings.GroupAdd),
 		LastSeen:     string(settings.LastSeen),
@@ -38,14 +41,20 @@ func (s *SyncService) SyncPrivacySettings(ctx context.Context) error {
 
 // SyncStatusPrivacy fetches status privacy settings.
 func (s *SyncService) SyncStatusPrivacy(ctx context.Context) error {
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.log.Debugf("Syncing status privacy")
+
 	privacy, err := s.client.GetStatusPrivacy(ctx)
 	if err != nil {
 		s.log.Errorf("Failed to get status privacy: %v", err)
 		return err
 	}
+	if privacy == nil {
+		return nil
+	}
 
-	// Save to database
 	for _, prc := range privacy {
 		statusPrivacyType := &store.StatusPrivacyType{
 			Type:      string(prc.Type),
@@ -76,14 +85,17 @@ func (s *SyncService) SyncStatusPrivacy(ctx context.Context) error {
 
 // TryFetchPrivacySettings attempts to fetch privacy with fallback.
 func (s *SyncService) TryFetchPrivacySettings(ctx context.Context) error {
+	if s.client == nil || ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.log.Debugf("Trying to fetch privacy settings")
+
 	settings, err := s.client.TryFetchPrivacySettings(ctx, true)
 	if err != nil {
 		s.log.Errorf("Failed to fetch privacy settings: %v", err)
 		return err
 	}
 
-	// Save to database
 	privacySettings := &store.PrivacySettings{
 		GroupAdd:     string(settings.GroupAdd),
 		LastSeen:     string(settings.LastSeen),

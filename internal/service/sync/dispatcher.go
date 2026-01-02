@@ -29,14 +29,19 @@ func NewDispatcher(service *SyncService, ctx context.Context, log waLog.Logger) 
 // Handle routes an event to the appropriate coalescence handler.
 // All handlers are called asynchronously (goroutines) to avoid blocking.
 func (d *Dispatcher) Handle(evt interface{}) {
+	if d.ctx.Err() != nil {
+		return
+	}
 	switch e := evt.(type) {
 	case *events.Connected:
-		// Trigger full sync on connect
 		go func() {
 			if err := d.service.FullSync(d.ctx); err != nil {
 				d.log.Warnf("Initial sync failed: %v", err)
+				return
 			}
-			// Start periodic scheduler
+			if d.ctx.Err() != nil {
+				return
+			}
 			d.service.StartScheduler(DefaultSchedulerConfig())
 		}()
 

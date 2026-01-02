@@ -83,7 +83,7 @@ type Message struct {
 	LiveLocationSeq  int
 
 	// Contact card
-	VCard       string
+	VCards      []string // For all contact messages (single or array)
 	DisplayName string
 
 	// Poll
@@ -91,6 +91,25 @@ type Message struct {
 	PollOptions       []string
 	PollSelectMax     int
 	PollEncryptionKey []byte
+
+	// Link preview (extended text)
+	PreviewTitle       string
+	PreviewDescription string
+	PreviewURL         string
+	PreviewMatchedText string
+
+	// Group invite
+	InviteGroupJID    types.JID
+	InviteCode        string
+	InviteExpiration  int64
+
+	// Event
+	EventName        string
+	EventDescription string
+	EventStartTime   int64
+	EventEndTime     int64
+	EventJoinLink    string
+	EventIsCanceled  bool
 
 	// Flags
 	IsBroadcast      bool
@@ -132,6 +151,7 @@ func (s *MessageStore) Put(m *Message) error {
 	mentionedJIDs, _ := json.Marshal(jidsToStrings(m.MentionedJIDs))
 	groupMentions, _ := json.Marshal(m.GroupMentions)
 	pollOptions, _ := json.Marshal(m.PollOptions)
+	vcards, _ := json.Marshal(m.VCards)
 
 	var editTs sql.NullInt64
 	if !m.EditTimestamp.IsZero() {
@@ -154,8 +174,11 @@ func (s *MessageStore) Put(m *Message) error {
 			is_forwarded, forwarding_score,
 			latitude, longitude, location_name, location_address, location_url,
 			is_live_location, accuracy_meters, speed_mps, degrees_clockwise, live_location_sequence,
-			vcard, display_name,
+			vcards, display_name,
 			poll_name, poll_options, poll_select_max, poll_encryption_key,
+			preview_title, preview_description, preview_url, preview_matched_text,
+			invite_group_jid, invite_code, invite_expiration,
+			event_name, event_description, event_start_time, event_end_time, event_join_link, event_is_canceled,
 			is_broadcast, broadcast_list_jid, is_ephemeral, is_view_once,
 			is_starred, is_edited, edit_timestamp, is_revoked,
 			protocol_type, created_at
@@ -175,6 +198,9 @@ func (s *MessageStore) Put(m *Message) error {
 			?, ?, ?, ?, ?,
 			?, ?,
 			?, ?, ?, ?,
+			?, ?, ?, ?,
+			?, ?, ?,
+			?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?,
 			?, ?, ?, ?,
 			?, ?
@@ -200,8 +226,11 @@ func (s *MessageStore) Put(m *Message) error {
 		boolToInt(m.IsForwarded), nullInt(m.ForwardingScore),
 		nullFloat(m.Latitude), nullFloat(m.Longitude), nullString(m.LocationName), nullString(m.LocationAddress), nullString(m.LocationURL),
 		boolToInt(m.IsLiveLocation), nullInt(m.AccuracyMeters), nullFloat(m.SpeedMPS), nullInt(m.DegreesClockwise), nullInt(m.LiveLocationSeq),
-		nullString(m.VCard), nullString(m.DisplayName),
+		vcards, nullString(m.DisplayName),
 		nullString(m.PollName), pollOptions, nullInt(m.PollSelectMax), m.PollEncryptionKey,
+		nullString(m.PreviewTitle), nullString(m.PreviewDescription), nullString(m.PreviewURL), nullString(m.PreviewMatchedText),
+		nullJID(m.InviteGroupJID), nullString(m.InviteCode), nullInt64(m.InviteExpiration),
+		nullString(m.EventName), nullString(m.EventDescription), nullInt64(m.EventStartTime), nullInt64(m.EventEndTime), nullString(m.EventJoinLink), boolToInt(m.EventIsCanceled),
 		boolToInt(m.IsBroadcast), nullJID(m.BroadcastListJID), boolToInt(m.IsEphemeral), boolToInt(m.IsViewOnce),
 		boolToInt(m.IsStarred), boolToInt(m.IsEdited), editTs, boolToInt(m.IsRevoked),
 		nullInt(m.ProtocolType), now,

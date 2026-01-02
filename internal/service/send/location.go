@@ -4,6 +4,7 @@ import (
 	"orion-agent/internal/utils"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -81,6 +82,21 @@ func (l *LocationContent) ToMessage() (*waE2E.Message, error) {
 func (l *LocationContent) MediaType() utils.Type {
 	return "" // Not a media message
 }
+
+// MessageType implements Content.
+func (l *LocationContent) MessageType() string { return "location" }
+
+// TextContent implements Content.
+func (l *LocationContent) TextContent() string { return l.Name }
+
+// Caption implements Content.
+func (l *LocationContent) GetCaption() string { return l.Address }
+
+// GetMentionedJIDs implements Content.
+func (l *LocationContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (l *LocationContent) GetContextInfo() *ContextInfo { return l.ContextInfo }
 
 // LiveLocationContent represents a live location message.
 type LiveLocationContent struct {
@@ -166,3 +182,18 @@ func (l *LiveLocationContent) ToMessage() (*waE2E.Message, error) {
 func (l *LiveLocationContent) MediaType() utils.Type {
 	return "" // Not a media message
 }
+
+// MessageType implements Content.
+func (l *LiveLocationContent) MessageType() string { return "live_location" }
+
+// TextContent implements Content.
+func (l *LiveLocationContent) TextContent() string { return l.Caption }
+
+// Caption implements Content.
+func (l *LiveLocationContent) GetCaption() string { return l.Caption }
+
+// GetMentionedJIDs implements Content.
+func (l *LiveLocationContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (l *LiveLocationContent) GetContextInfo() *ContextInfo { return l.ContextInfo }

@@ -43,13 +43,21 @@ func (u *Utils) SetClient(client *whatsmeow.Client) {
 	u.client = client
 }
 
+// OwnJID returns the current user's JID.
+func (u *Utils) OwnJID() types.JID {
+	if u.client != nil && u.client.Store != nil && u.client.Store.ID != nil {
+		return u.client.Store.ID.ToNonAD()
+	}
+	return types.JID{}
+}
+
 // ===========================================================================
 // JID UTILITIES
 // ===========================================================================
 
-// NormalizeJID converts a PN to LID form. Returns as-is if not a PN.
+// NormalizeJID converts a PN to LID form and strips device info. Returns as-is if not a PN.
 func (u *Utils) NormalizeJID(ctx context.Context, jid types.JID) types.JID {
-	return u.ToLID(ctx, jid)
+	return u.ToLID(ctx, jid).ToNonAD()
 }
 
 // NormalizeJIDs converts multiple JIDs to LID form.

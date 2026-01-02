@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -20,24 +21,31 @@ func NewQRHandler(log waLog.Logger) *QRHandler {
 }
 
 // HandleQRChannel processes QR channel items and displays QR codes.
-func (h *QRHandler) HandleQRChannel(qrChan <-chan whatsmeow.QRChannelItem) error {
-	for item := range qrChan {
-		switch item.Event {
-		case "code":
-			h.log.Infof("Scan the QR code below with WhatsApp (Linked Devices)")
-			h.displayQR(item.Code)
-		case "timeout":
-			h.log.Warnf("QR code timeout - please restart to get a new QR code")
-			return fmt.Errorf("QR code timeout")
-		case "success":
-			h.log.Infof("Successfully paired!")
-			return nil
-		case "error":
-			h.log.Errorf("QR error: %v", item.Error)
-			return item.Error
+func (h *QRHandler) HandleQRChannel(ctx context.Context, qrChan <-chan whatsmeow.QRChannelItem) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case item, ok := <-qrChan:
+			if !ok {
+				return nil
+			}
+			switch item.Event {
+			case "code":
+				h.log.Infof("Scan the QR code below with WhatsApp (Linked Devices)")
+				h.displayQR(item.Code)
+			case "timeout":
+				h.log.Warnf("QR code timeout - please restart to get a new QR code")
+				return fmt.Errorf("QR code timeout")
+			case "success":
+				h.log.Infof("Successfully paired!")
+				return nil
+			case "error":
+				h.log.Errorf("QR error: %v", item.Error)
+				return item.Error
+			}
 		}
 	}
-	return nil
 }
 
 // displayQR displays a QR code in the terminal.

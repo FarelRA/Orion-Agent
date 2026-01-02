@@ -13,6 +13,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -141,6 +142,21 @@ func (i *ImageContent) ToMessage() (*waE2E.Message, error) {
 func (i *ImageContent) MediaType() utils.Type {
 	return utils.TypeImage
 }
+
+// MessageType implements Content.
+func (i *ImageContent) MessageType() string { return "image" }
+
+// TextContent implements Content.
+func (i *ImageContent) TextContent() string { return i.Caption }
+
+// Caption implements Content.
+func (i *ImageContent) GetCaption() string { return i.Caption }
+
+// GetMentionedJIDs implements Content.
+func (i *ImageContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (i *ImageContent) GetContextInfo() *ContextInfo { return i.ContextInfo }
 
 // VideoContent represents a video message.
 type VideoContent struct {
@@ -279,6 +295,21 @@ func (v *VideoContent) MediaType() utils.Type {
 	return utils.TypeVideo
 }
 
+// MessageType implements Content.
+func (v *VideoContent) MessageType() string { return "video" }
+
+// TextContent implements Content.
+func (v *VideoContent) TextContent() string { return v.Caption }
+
+// Caption implements Content.
+func (v *VideoContent) GetCaption() string { return v.Caption }
+
+// GetMentionedJIDs implements Content.
+func (v *VideoContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (v *VideoContent) GetContextInfo() *ContextInfo { return v.ContextInfo }
+
 // AudioContent represents an audio message.
 type AudioContent struct {
 	Data            []byte
@@ -374,6 +405,21 @@ func (a *AudioContent) ToMessage() (*waE2E.Message, error) {
 func (a *AudioContent) MediaType() utils.Type {
 	return utils.TypeAudio
 }
+
+// MessageType implements Content.
+func (a *AudioContent) MessageType() string { return "audio" }
+
+// TextContent implements Content.
+func (a *AudioContent) TextContent() string { return "" }
+
+// Caption implements Content.
+func (a *AudioContent) GetCaption() string { return "" }
+
+// GetMentionedJIDs implements Content.
+func (a *AudioContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (a *AudioContent) GetContextInfo() *ContextInfo { return a.ContextInfo }
 
 // DocumentContent represents a document message.
 type DocumentContent struct {
@@ -482,6 +528,21 @@ func (d *DocumentContent) MediaType() utils.Type {
 	return utils.TypeDocument
 }
 
+// MessageType implements Content.
+func (d *DocumentContent) MessageType() string { return "document" }
+
+// TextContent implements Content.
+func (d *DocumentContent) TextContent() string { return d.Caption }
+
+// Caption implements Content.
+func (d *DocumentContent) GetCaption() string { return d.Caption }
+
+// GetMentionedJIDs implements Content.
+func (d *DocumentContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (d *DocumentContent) GetContextInfo() *ContextInfo { return d.ContextInfo }
+
 // StickerContent represents a sticker message.
 type StickerContent struct {
 	Data        []byte
@@ -572,3 +633,18 @@ func (s *StickerContent) ToMessage() (*waE2E.Message, error) {
 func (s *StickerContent) MediaType() utils.Type {
 	return utils.TypeSticker
 }
+
+// MessageType implements Content.
+func (s *StickerContent) MessageType() string { return "sticker" }
+
+// TextContent implements Content.
+func (s *StickerContent) TextContent() string { return "" }
+
+// Caption implements Content.
+func (s *StickerContent) GetCaption() string { return "" }
+
+// GetMentionedJIDs implements Content.
+func (s *StickerContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (s *StickerContent) GetContextInfo() *ContextInfo { return s.ContextInfo }

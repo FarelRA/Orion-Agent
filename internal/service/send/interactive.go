@@ -82,6 +82,21 @@ func (p *PollContent) MediaType() utils.Type {
 	return ""
 }
 
+// MessageType implements Content.
+func (p *PollContent) MessageType() string { return "poll" }
+
+// TextContent implements Content.
+func (p *PollContent) TextContent() string { return p.Question }
+
+// Caption implements Content.
+func (p *PollContent) GetCaption() string { return "" }
+
+// GetMentionedJIDs implements Content.
+func (p *PollContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (p *PollContent) GetContextInfo() *ContextInfo { return p.ContextInfo }
+
 // EncryptionKey returns the poll encryption key (needed for voting).
 func (p *PollContent) EncryptionKey() []byte {
 	return p.encKey
@@ -193,6 +208,21 @@ func (g *GroupInviteContent) ToMessage() (*waE2E.Message, error) {
 func (g *GroupInviteContent) MediaType() utils.Type {
 	return ""
 }
+
+// MessageType implements Content.
+func (g *GroupInviteContent) MessageType() string { return "group_invite" }
+
+// TextContent implements Content.
+func (g *GroupInviteContent) TextContent() string { return g.GroupName }
+
+// Caption implements Content.
+func (g *GroupInviteContent) GetCaption() string { return g.Caption }
+
+// GetMentionedJIDs implements Content.
+func (g *GroupInviteContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (g *GroupInviteContent) GetContextInfo() *ContextInfo { return g.ContextInfo }
 
 // BuildGroupInvite builds a group invite from group info.
 func (s *SendService) BuildGroupInvite(ctx context.Context, groupJID types.JID) (*GroupInviteContent, error) {
@@ -306,6 +336,21 @@ func (e *EventContent) ToMessage() (*waE2E.Message, error) {
 func (e *EventContent) MediaType() utils.Type {
 	return ""
 }
+
+// MessageType implements Content.
+func (e *EventContent) MessageType() string { return "event" }
+
+// TextContent implements Content.
+func (e *EventContent) TextContent() string { return e.Name }
+
+// Caption implements Content.
+func (e *EventContent) GetCaption() string { return e.Description }
+
+// GetMentionedJIDs implements Content.
+func (e *EventContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (e *EventContent) GetContextInfo() *ContextInfo { return e.ContextInfo }
 
 // GetClient returns the underlying whatsmeow client for advanced operations.
 func (s *SendService) GetClient() *whatsmeow.Client {

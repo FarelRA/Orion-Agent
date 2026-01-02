@@ -48,6 +48,21 @@ func (t *TextContent) MediaType() utils.Type {
 	return "" // Not a media message
 }
 
+// MessageType implements Content.
+func (t *TextContent) MessageType() string { return "text" }
+
+// TextContent implements Content.
+func (t *TextContent) TextContent() string { return t.Text }
+
+// Caption implements Content.
+func (t *TextContent) GetCaption() string { return "" }
+
+// GetMentionedJIDs implements Content.
+func (t *TextContent) GetMentionedJIDs() []types.JID { return nil }
+
+// GetContextInfo implements Content.
+func (t *TextContent) GetContextInfo() *ContextInfo { return t.ContextInfo }
+
 // ExtendedTextContent represents a text message with link preview, mentions, etc.
 type ExtendedTextContent struct {
 	Text          string
@@ -172,3 +187,18 @@ func (e *ExtendedTextContent) ToMessage() (*waE2E.Message, error) {
 func (e *ExtendedTextContent) MediaType() utils.Type {
 	return "" // Not a media message
 }
+
+// MessageType implements Content.
+func (e *ExtendedTextContent) MessageType() string { return "text" }
+
+// TextContent implements Content.
+func (e *ExtendedTextContent) TextContent() string { return e.Text }
+
+// Caption implements Content.
+func (e *ExtendedTextContent) GetCaption() string { return "" }
+
+// GetMentionedJIDs implements Content.
+func (e *ExtendedTextContent) GetMentionedJIDs() []types.JID { return e.MentionedJIDs }
+
+// GetContextInfo implements Content.
+func (e *ExtendedTextContent) GetContextInfo() *ContextInfo { return e.ContextInfo }

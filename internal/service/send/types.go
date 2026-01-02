@@ -16,6 +16,21 @@ type Content interface {
 
 	// MediaType returns the media type for upload, or TypeUnknown for non-utils.
 	MediaType() utils.Type
+
+	// MessageType returns the message type string for database storage.
+	MessageType() string
+
+	// TextContent returns the text content for database storage.
+	TextContent() string
+
+	// GetCaption returns the caption for media messages.
+	GetCaption() string
+
+	// GetMentionedJIDs returns mentioned JIDs if any.
+	GetMentionedJIDs() []types.JID
+
+	// GetContextInfo returns context info (for replies, etc).
+	GetContextInfo() *ContextInfo
 }
 
 // SendResult contains the result of a successful send operation.
