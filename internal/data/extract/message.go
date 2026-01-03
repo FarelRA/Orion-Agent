@@ -91,9 +91,6 @@ func extractTextContent(msg *waE2E.Message, m *store.Message) {
 		m.PreviewDescription = ext.GetDescription()
 		m.PreviewMatchedText = ext.GetMatchedText()
 		m.PreviewURL = ext.GetMatchedText() // URL is in MatchedText
-		if m.Thumbnail == nil {
-			m.Thumbnail = ext.GetJPEGThumbnail()
-		}
 		return
 	}
 
@@ -363,11 +360,7 @@ func extractImageMedia(img *waE2E.ImageMessage, m *store.Message) {
 	m.Mimetype = img.GetMimetype()
 	m.Width = int(img.GetWidth())
 	m.Height = int(img.GetHeight())
-	m.Thumbnail = img.GetJPEGThumbnail()
 	m.Caption = img.GetCaption()
-	m.ThumbnailDirectPath = img.GetThumbnailDirectPath()
-	m.ThumbnailSHA256 = img.GetThumbnailSHA256()
-	m.ThumbnailEncSHA256 = img.GetThumbnailEncSHA256()
 }
 
 func extractVideoMedia(vid *waE2E.VideoMessage, m *store.Message) {
@@ -382,13 +375,8 @@ func extractVideoMedia(vid *waE2E.VideoMessage, m *store.Message) {
 	m.Width = int(vid.GetWidth())
 	m.Height = int(vid.GetHeight())
 	m.DurationSeconds = int(vid.GetSeconds())
-	m.Thumbnail = vid.GetJPEGThumbnail()
 	m.Caption = vid.GetCaption()
 	m.IsGIF = vid.GetGifPlayback()
-	m.StreamingSidecar = vid.GetStreamingSidecar()
-	m.ThumbnailDirectPath = vid.GetThumbnailDirectPath()
-	m.ThumbnailSHA256 = vid.GetThumbnailSHA256()
-	m.ThumbnailEncSHA256 = vid.GetThumbnailEncSHA256()
 }
 
 func extractAudioMedia(aud *waE2E.AudioMessage, m *store.Message) {
@@ -402,7 +390,6 @@ func extractAudioMedia(aud *waE2E.AudioMessage, m *store.Message) {
 	m.Mimetype = aud.GetMimetype()
 	m.DurationSeconds = int(aud.GetSeconds())
 	m.IsPTT = aud.GetPTT()
-	m.Waveform = aud.GetWaveform()
 }
 
 func extractDocumentMedia(doc *waE2E.DocumentMessage, m *store.Message) {
@@ -414,12 +401,8 @@ func extractDocumentMedia(doc *waE2E.DocumentMessage, m *store.Message) {
 	m.FileEncSHA256 = doc.GetFileEncSHA256()
 	m.FileLength = int64(doc.GetFileLength())
 	m.Mimetype = doc.GetMimetype()
-	m.Thumbnail = doc.GetJPEGThumbnail()
 	m.Caption = doc.GetCaption()
 	m.DisplayName = doc.GetFileName()
-	m.ThumbnailDirectPath = doc.GetThumbnailDirectPath()
-	m.ThumbnailSHA256 = doc.GetThumbnailSHA256()
-	m.ThumbnailEncSHA256 = doc.GetThumbnailEncSHA256()
 }
 
 func extractStickerMedia(stk *waE2E.StickerMessage, m *store.Message) {
@@ -614,7 +597,6 @@ func extractLocation(msg *waE2E.Message, m *store.Message) {
 		m.LocationAddress = loc.GetAddress()
 		m.LocationURL = loc.GetURL()
 		m.AccuracyMeters = int(loc.GetAccuracyInMeters())
-		m.Thumbnail = loc.GetJPEGThumbnail()
 		return
 	}
 
@@ -627,7 +609,6 @@ func extractLocation(msg *waE2E.Message, m *store.Message) {
 		m.DegreesClockwise = int(live.GetDegreesClockwiseFromMagneticNorth())
 		m.LiveLocationSeq = int(live.GetSequenceNumber())
 		m.Caption = live.GetCaption()
-		m.Thumbnail = live.GetJPEGThumbnail()
 		return
 	}
 }
@@ -714,7 +695,6 @@ func extractGroupInvite(msg *waE2E.Message, m *store.Message) {
 	m.InviteExpiration = invite.GetInviteExpiration()
 	m.DisplayName = invite.GetGroupName()
 	m.Caption = invite.GetCaption()
-	m.Thumbnail = invite.GetJPEGThumbnail()
 }
 
 // extractInteractive extracts interactive message components.

@@ -341,7 +341,6 @@ func (s *SendService) saveForwardedMessage(result *SendResult, msg *waE2E.Messag
 		storeMsg.PreviewDescription = ext.GetDescription()
 		storeMsg.PreviewURL = ext.GetMatchedText() // URL is in MatchedText
 		storeMsg.PreviewMatchedText = ext.GetMatchedText()
-		storeMsg.Thumbnail = ext.GetJPEGThumbnail()
 		if ctx := ext.ContextInfo; ctx != nil {
 			storeMsg.ForwardingScore = int(ctx.GetForwardingScore())
 			storeMsg.MentionedJIDs = parseJIDStrings(ctx.MentionedJID)
@@ -360,7 +359,6 @@ func (s *SendService) saveForwardedMessage(result *SendResult, msg *waE2E.Messag
 		storeMsg.FileLength = int64(img.GetFileLength())
 		storeMsg.Width = int(img.GetWidth())
 		storeMsg.Height = int(img.GetHeight())
-		storeMsg.Thumbnail = img.GetJPEGThumbnail()
 		storeMsg.IsViewOnce = img.GetViewOnce()
 		if ctx := img.ContextInfo; ctx != nil {
 			storeMsg.ForwardingScore = int(ctx.GetForwardingScore())
@@ -380,10 +378,8 @@ func (s *SendService) saveForwardedMessage(result *SendResult, msg *waE2E.Messag
 		storeMsg.Width = int(vid.GetWidth())
 		storeMsg.Height = int(vid.GetHeight())
 		storeMsg.DurationSeconds = int(vid.GetSeconds())
-		storeMsg.Thumbnail = vid.GetJPEGThumbnail()
 		storeMsg.IsGIF = vid.GetGifPlayback()
 		storeMsg.IsViewOnce = vid.GetViewOnce()
-		storeMsg.StreamingSidecar = vid.GetStreamingSidecar()
 		if ctx := vid.ContextInfo; ctx != nil {
 			storeMsg.ForwardingScore = int(ctx.GetForwardingScore())
 		}
@@ -400,7 +396,6 @@ func (s *SendService) saveForwardedMessage(result *SendResult, msg *waE2E.Messag
 		storeMsg.FileLength = int64(aud.GetFileLength())
 		storeMsg.DurationSeconds = int(aud.GetSeconds())
 		storeMsg.IsPTT = aud.GetPTT()
-		storeMsg.Waveform = aud.GetWaveform()
 		if ctx := aud.ContextInfo; ctx != nil {
 			storeMsg.ForwardingScore = int(ctx.GetForwardingScore())
 		}
@@ -417,7 +412,6 @@ func (s *SendService) saveForwardedMessage(result *SendResult, msg *waE2E.Messag
 		storeMsg.FileSHA256 = doc.GetFileSHA256()
 		storeMsg.FileEncSHA256 = doc.GetFileEncSHA256()
 		storeMsg.FileLength = int64(doc.GetFileLength())
-		storeMsg.Thumbnail = doc.GetJPEGThumbnail()
 		if ctx := doc.ContextInfo; ctx != nil {
 			storeMsg.ForwardingScore = int(ctx.GetForwardingScore())
 		}
@@ -448,7 +442,6 @@ func (s *SendService) saveForwardedMessage(result *SendResult, msg *waE2E.Messag
 		storeMsg.LocationAddress = loc.GetAddress()
 		storeMsg.LocationURL = loc.GetURL()
 		storeMsg.TextContent = loc.GetComment()
-		storeMsg.Thumbnail = loc.GetJPEGThumbnail()
 		if ctx := loc.ContextInfo; ctx != nil {
 			storeMsg.ForwardingScore = int(ctx.GetForwardingScore())
 		}
@@ -464,7 +457,6 @@ func (s *SendService) saveForwardedMessage(result *SendResult, msg *waE2E.Messag
 		storeMsg.SpeedMPS = float64(loc.GetSpeedInMps())
 		storeMsg.DegreesClockwise = int(loc.GetDegreesClockwiseFromMagneticNorth())
 		storeMsg.LiveLocationSeq = int(loc.GetSequenceNumber())
-		storeMsg.Thumbnail = loc.GetJPEGThumbnail()
 		if ctx := loc.ContextInfo; ctx != nil {
 			storeMsg.ForwardingScore = int(ctx.GetForwardingScore())
 		}

@@ -16,12 +16,12 @@ type ToolRecord struct {
 
 // ToolStore handles persistence of AI tool calls.
 type ToolStore struct {
-	db *sql.DB
+	store *Store
 }
 
 // NewToolStore creates a new ToolStore.
-func NewToolStore(db *sql.DB) *ToolStore {
-	return &ToolStore{db: db}
+func NewToolStore(store *Store) *ToolStore {
+	return &ToolStore{store: store}
 }
 
 // Put saves tool calls and results for a message.
@@ -33,7 +33,7 @@ func (s *ToolStore) Put(messageID, chatJID string, toolCalls, toolResults []byte
 			tool_calls = excluded.tool_calls,
 			tool_results = excluded.tool_results`
 
-	_, err := s.db.Exec(query, messageID, chatJID, toolCalls, toolResults, time.Now().Unix())
+	_, err := s.store.Exec(query, messageID, chatJID, toolCalls, toolResults, time.Now().Unix())
 	return err
 }
 
@@ -43,7 +43,7 @@ func (s *ToolStore) GetByMessageID(messageID string) (*ToolRecord, error) {
 		FROM orion_tools WHERE message_id = ?`
 
 	var record ToolRecord
-	err := s.db.QueryRow(query, messageID).Scan(
+	err := s.store.QueryRow(query, messageID).Scan(
 		&record.MessageID,
 		&record.ChatJID,
 		&record.ToolCalls,
@@ -64,7 +64,7 @@ func (s *ToolStore) GetByChatJID(chatJID string) ([]*ToolRecord, error) {
 	query := `SELECT message_id, chat_jid, tool_calls, tool_results, created_at
 		FROM orion_tools WHERE chat_jid = ? ORDER BY created_at DESC`
 
-	rows, err := s.db.Query(query, chatJID)
+	rows, err := s.store.Query(query, chatJID)
 	if err != nil {
 		return nil, err
 	}

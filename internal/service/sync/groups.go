@@ -21,7 +21,12 @@ func (s *SyncService) SyncAllGroups(ctx context.Context) error {
 	}
 	s.log.Debugf("Syncing all groups")
 
-	groups, err := s.client.GetJoinedGroups(ctx)
+	var groups []*types.GroupInfo
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		groups, err = s.client.GetJoinedGroups(ctx)
+		return err
+	})
 	if err != nil {
 		s.log.Errorf("Failed to get joined groups: %v", err)
 		return err
@@ -81,7 +86,12 @@ func (s *SyncService) SyncGroupInfo(ctx context.Context, jid types.JID) error {
 	s.log.Debugf("Syncing group info for %s", jid)
 
 	jid = s.utils.NormalizeJID(ctx, jid)
-	info, err := s.client.GetGroupInfo(ctx, jid)
+	var info *types.GroupInfo
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		info, err = s.client.GetGroupInfo(ctx, jid)
+		return err
+	})
 	if err != nil {
 		s.log.Errorf("Failed to get group info for %s: %v", jid, err)
 		return err
@@ -134,7 +144,12 @@ func (s *SyncService) SyncGroupInviteLink(ctx context.Context, jid types.JID) er
 	s.log.Debugf("Syncing invite link for %s", jid)
 
 	jid = s.utils.NormalizeJID(ctx, jid)
-	link, err := s.client.GetGroupInviteLink(ctx, jid, false)
+	var link string
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		link, err = s.client.GetGroupInviteLink(ctx, jid, false)
+		return err
+	})
 	if err != nil || link == "" {
 		s.log.Errorf("Failed to get invite link for %s: %v", jid, err)
 		return nil // Permission denied is OK
@@ -175,7 +190,12 @@ func (s *SyncService) SyncGroupPicture(ctx context.Context, jid types.JID, isCom
 		IsCommunity: isCommunity,
 	}
 
-	pic, err := s.client.GetProfilePictureInfo(ctx, jid, params)
+	var pic *types.ProfilePictureInfo
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		pic, err = s.client.GetProfilePictureInfo(ctx, jid, params)
+		return err
+	})
 	if err != nil || pic == nil {
 		s.log.Debugf("No group picture for %s: %v", jid, err)
 		// Mark as attempted with "0"
@@ -186,6 +206,10 @@ func (s *SyncService) SyncGroupPicture(ctx context.Context, jid types.JID, isCom
 	if err := s.groups.UpdateProfilePic(jid, pic.ID, pic.URL); err != nil {
 		s.log.Errorf("Failed to update group picture for %s: %v", jid, err)
 		return err
+	}
+
+	if s.media != nil {
+		s.media.QueueProfilePicture(jid, pic.ID, pic.URL)
 	}
 
 	s.log.Infof("Synced group picture for %s", jid)
@@ -200,7 +224,12 @@ func (s *SyncService) SyncGroupFromLink(ctx context.Context, code string) (*type
 	}
 	s.log.Debugf("Syncing group from link %s", code)
 
-	info, err := s.client.GetGroupInfoFromLink(ctx, code)
+	var info *types.GroupInfo
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		info, err = s.client.GetGroupInfoFromLink(ctx, code)
+		return err
+	})
 	if err != nil {
 		s.log.Errorf("Failed to get group info from link %s: %v", code, err)
 		return nil, err
@@ -230,7 +259,7 @@ func (s *SyncService) SyncAllGroupPictures(ctx context.Context) error {
 	if s.client == nil || ctx.Err() != nil {
 		return ctx.Err()
 	}
-	s.log.Debugf("Syncing group pictures (missing only)")
+	s.log.Debugf("Syncing group pictures")
 
 	groups, err := s.groups.GetAll()
 	if err != nil || groups == nil {

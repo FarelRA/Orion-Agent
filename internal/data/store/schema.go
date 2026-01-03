@@ -137,19 +137,13 @@ CREATE TABLE IF NOT EXISTS orion_messages (
     width INTEGER,
     height INTEGER,
     duration_seconds INTEGER,
-    thumbnail BLOB,
-    thumbnail_direct_path TEXT,
-    thumbnail_sha256 BLOB,
-    thumbnail_enc_sha256 BLOB,
     
     -- Audio specific
     is_ptt INTEGER DEFAULT 0,
-    waveform BLOB,
     
     -- Video specific
     is_gif INTEGER DEFAULT 0,
     is_animated INTEGER DEFAULT 0,
-    streaming_sidecar BLOB,
     
     -- Quote/Reply context
     quoted_message_id TEXT,
@@ -418,7 +412,6 @@ CREATE TABLE IF NOT EXISTS orion_status_updates (
     file_enc_sha256 BLOB,
     file_length INTEGER,
     mimetype TEXT,
-    thumbnail BLOB,
     
     -- Timing
     timestamp INTEGER NOT NULL,

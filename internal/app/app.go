@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"go.mau.fi/whatsmeow/types/events"
 
@@ -15,6 +14,7 @@ import (
 	"orion-agent/internal/infra/logger"
 	"orion-agent/internal/service/agent"
 	"orion-agent/internal/service/event"
+	"orion-agent/internal/service/media"
 	"orion-agent/internal/service/send"
 	"orion-agent/internal/service/sync"
 	"orion-agent/internal/utils"
@@ -26,18 +26,20 @@ type App struct {
 	Log          *logger.Logger
 	Store        *store.Store
 	Client       *Client
-	Dispatcher   *event.Dispatcher
-	JIDService   *utils.Utils
+	Utils        *utils.Utils
+	EventService *event.EventService
 	SyncService  *sync.SyncService
 	SendService  *send.SendService
-	AgentService *agent.Service
+	AgentService *agent.AgentService
+	MediaService *media.MediaService
 
 	// Sub-stores for convenience
-	ContactStore *store.ContactStore
-	ChatStore    *store.ChatStore
-	MessageStore *store.MessageStore
-	ReceiptStore *store.ReceiptStore
-	GroupStore   *store.GroupStore
+	ContactStore    *store.ContactStore
+	ChatStore       *store.ChatStore
+	MessageStore    *store.MessageStore
+	ReceiptStore    *store.ReceiptStore
+	GroupStore      *store.GroupStore
+	MediaCacheStore *store.MediaCacheStore
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -73,8 +75,10 @@ func New(cfg *config.Config) (*App, error) {
 	callStore := store.NewCallStore(appStore)
 	pollStore := store.NewPollStore(appStore)
 	labelStore := store.NewLabelStore(appStore)
+	toolStore := store.NewToolStore(appStore)
 	summaryStore := store.NewSummaryStore(appStore)
 	settingsStore := store.NewSettingsStore(appStore, cfg)
+	mediaCacheStore := store.NewMediaCacheStore(appStore)
 
 	// Create client
 	waClient, err := NewClient(cfg, appStore, log)
@@ -83,19 +87,20 @@ func New(cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
 
-	// Create dispatcher
-	dispatcher := event.NewDispatcher(log)
-
-	// Create utils (JID normalization, etc.)
+	// Create utils
 	appUtils := utils.New(contactStore, waClient.Underlying())
 
 	// Create sync state store
 	syncStateStore := store.NewSyncStateStore(appStore)
 
+	// Create media service
+	mediaService := media.NewMediaService(waClient.Underlying(), &cfg.Media, cfg.StorePath, mediaCacheStore, log)
+
 	// Create sync service with ALL stores
 	syncService := sync.NewSyncService(
 		waClient.Underlying(),
 		appUtils,
+		mediaService,
 		contactStore,
 		groupStore,
 		chatStore,
@@ -109,44 +114,15 @@ func New(cfg *config.Config) (*App, error) {
 	// Create send service
 	sendService := send.NewSendService(waClient.Underlying(), appUtils, messageStore, reactionStore, pollStore, log)
 
-	// Create tool store
-	toolStore := store.NewToolStore(appStore.DB())
-
 	// Create agent service
-	agentService := agent.NewService(cfg, appStore, settingsStore, summaryStore, toolStore, sendService, log)
+	agentService := agent.NewAgentService(cfg, appStore, settingsStore, summaryStore, toolStore, sendService, log)
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	app := &App{
-		Config:       cfg,
-		Log:          log,
-		Store:        appStore,
-		Client:       waClient,
-		Dispatcher:   dispatcher,
-		JIDService:   appUtils,
-		SyncService:  syncService,
-		SendService:  sendService,
-		AgentService: agentService,
-		ContactStore: contactStore,
-		ChatStore:    chatStore,
-		MessageStore: messageStore,
-		ReceiptStore: receiptStore,
-		GroupStore:   groupStore,
-		ctx:          ctx,
-		cancel:       cancel,
-	}
-
-	// Set up sync dispatcher for coalescence
-	syncService.SetDispatcher(ctx)
-
-	// Register event handler
-	waClient.AddEventHandler(app.handleEvent)
-
-	// Register DataHandler for persistence (normalizes JIDs and saves to DB)
-	dataHandler := event.NewDataHandler(
-		ctx,
+	// Create event service with ALL stores
+	eventService := event.NewEventService(
 		log,
 		appUtils,
+		agentService, // Direct agent integration
+		mediaService,
 		messageStore,
 		contactStore,
 		chatStore,
@@ -160,7 +136,38 @@ func New(cfg *config.Config) (*App, error) {
 		privacyStore,
 		blocklistStore,
 	)
-	dispatcher.Register(dataHandler)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	app := &App{
+		Config:          cfg,
+		Log:             log,
+		Store:           appStore,
+		Client:          waClient,
+		EventService:    eventService,
+		Utils:           appUtils,
+		SyncService:     syncService,
+		SendService:     sendService,
+		AgentService:    agentService,
+		ContactStore:    contactStore,
+		ChatStore:       chatStore,
+		MessageStore:    messageStore,
+		ReceiptStore:    receiptStore,
+		GroupStore:      groupStore,
+		MediaCacheStore: mediaCacheStore,
+		MediaService:    mediaService,
+		ctx:             ctx,
+		cancel:          cancel,
+	}
+
+	// Set up sync dispatcher for coalescence
+	syncService.SetDispatcher(ctx)
+
+	// Set up event dispatcher
+	eventService.SetDispatcher(ctx)
+
+	// Register event handler
+	waClient.AddEventHandler(app.handleEvent)
 
 	return app, nil
 }
@@ -168,6 +175,9 @@ func New(cfg *config.Config) (*App, error) {
 // Run starts the application.
 func (a *App) Run() error {
 	a.Log.Infof("Starting Orion Agent...")
+
+	// Start media service
+	a.MediaService.Start()
 
 	// Setup signal handling to cancel context
 	sigChan := make(chan os.Signal, 1)
@@ -232,76 +242,24 @@ func (a *App) handleEvent(evt interface{}) {
 
 	case *events.PairSuccess:
 		a.Log.Infof("Paired successfully as %s", e.ID)
-		a.JIDService.StoreMappingFromEvent(e.ID, e.LID)
+		a.Utils.StoreMappingFromEvent(e.ID, e.LID)
 		a.AgentService.SetOwnJID(e.ID)
 
 	case *events.Message:
-		// Process through agent after persistence
-		go a.processAgentMessage(e)
+		// Message processing now happens in DataHandler via AgentProcessor
 	}
 
-	// Route to event dispatcher for persistence
-	a.Dispatcher.Handle(evt)
+	// Route to event service for persistence
+	a.EventService.Handle(evt)
 	// Route to sync service for coalescence
 	a.SyncService.Handle(evt)
-}
-
-// processAgentMessage processes a message through the AI agent.
-func (a *App) processAgentMessage(e *events.Message) {
-	// Skip if from self
-	if e.Info.IsFromMe {
-		return
-	}
-
-	// Skip old/history messages based on config (0 = no limit)
-	maxAge := a.Config.AI.MaxMessageAge
-	if maxAge > 0 && time.Since(e.Info.Timestamp) > time.Duration(maxAge)*time.Second {
-		return
-	}
-
-	// Extract text content
-	text := ""
-	if e.Message.GetConversation() != "" {
-		text = e.Message.GetConversation()
-	} else if ext := e.Message.GetExtendedTextMessage(); ext != nil {
-		text = ext.GetText()
-	}
-
-	// Skip empty messages
-	if text == "" {
-		return
-	}
-
-	// Extract mentioned JIDs
-	var mentionedJIDs []string
-	if ext := e.Message.GetExtendedTextMessage(); ext != nil && ext.ContextInfo != nil {
-		mentionedJIDs = ext.ContextInfo.MentionedJID
-	}
-
-	// Process through agent
-	err := a.AgentService.ProcessMessage(
-		a.ctx,
-		e.Info.Chat,
-		e.Info.Sender,
-		e.Info.ID,
-		text,
-		mentionedJIDs,
-		e.Info.IsFromMe,
-	)
-	if err != nil {
-		a.Log.Warnf("Agent processing failed: %v", err)
-	}
 }
 
 // Shutdown gracefully shuts down the application.
 func (a *App) Shutdown() error {
 	a.cancel()
+	a.MediaService.Stop()
 	a.SyncService.StopScheduler()
 	a.Client.Disconnect()
 	return a.Store.Close()
-}
-
-// RegisterHandler registers an event handler with the dispatcher.
-func (a *App) RegisterHandler(h event.Handler) {
-	a.Dispatcher.Register(h)
 }

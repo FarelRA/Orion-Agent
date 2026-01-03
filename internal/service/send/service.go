@@ -137,7 +137,6 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 		msg.Width = int(c.Width)
 		msg.Height = int(c.Height)
 		msg.IsViewOnce = c.ViewOnce
-		msg.Thumbnail = c.ThumbnailJPEG
 		if c.uploaded != nil {
 			msg.MediaURL = c.uploaded.URL
 			msg.MediaDirectPath = c.uploaded.DirectPath
@@ -154,7 +153,6 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 		msg.DurationSeconds = int(c.DurationSeconds)
 		msg.IsViewOnce = c.ViewOnce
 		msg.IsGIF = c.GifPlayback
-		msg.Thumbnail = c.ThumbnailJPEG
 		if c.uploaded != nil {
 			msg.MediaURL = c.uploaded.URL
 			msg.MediaDirectPath = c.uploaded.DirectPath
@@ -168,7 +166,6 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 		msg.Mimetype = c.MimeType
 		msg.DurationSeconds = int(c.DurationSeconds)
 		msg.IsPTT = c.IsPTT
-		msg.Waveform = c.Waveform
 		if c.uploaded != nil {
 			msg.MediaURL = c.uploaded.URL
 			msg.MediaDirectPath = c.uploaded.DirectPath
@@ -181,7 +178,6 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 	case *DocumentContent:
 		msg.Mimetype = c.MimeType
 		msg.DisplayName = c.Filename
-		msg.Thumbnail = c.ThumbnailJPEG
 		if c.uploaded != nil {
 			msg.MediaURL = c.uploaded.URL
 			msg.MediaDirectPath = c.uploaded.DirectPath
@@ -243,14 +239,12 @@ func (s *SendService) saveSentMessage(result *SendResult, content Content) {
 		msg.PreviewDescription = c.Description
 		msg.PreviewURL = c.CanonicalURL
 		msg.PreviewMatchedText = c.MatchedText
-		msg.Thumbnail = c.ThumbnailJPEG
 
 	case *GroupInviteContent:
 		msg.InviteGroupJID = c.GroupJID
 		msg.InviteCode = c.InviteCode
 		msg.InviteExpiration = c.Expiration
 		msg.DisplayName = c.GroupName
-		msg.Thumbnail = c.ThumbnailJPEG
 
 	case *EventContent:
 		msg.EventName = c.Name

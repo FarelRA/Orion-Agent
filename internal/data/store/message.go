@@ -37,24 +37,18 @@ type Message struct {
 	Mimetype          string
 
 	// Media metadata
-	Width               int
-	Height              int
-	DurationSeconds     int
-	Thumbnail           []byte
-	ThumbnailDirectPath string
-	ThumbnailSHA256     []byte
-	ThumbnailEncSHA256  []byte
+	Width           int
+	Height          int
+	DurationSeconds int
 
 	// Sticker specific
 	IsAnimated bool
 
 	// Audio specific
-	IsPTT    bool
-	Waveform []byte
+	IsPTT bool
 
 	// Video specific
-	IsGIF            bool
-	StreamingSidecar []byte
+	IsGIF bool
 
 	// Quote/Reply context
 	QuotedMessageID   string
@@ -167,10 +161,9 @@ func (s *MessageStore) Put(m *Message) error {
 			message_type, text_content, caption,
 			media_url, media_direct_path, media_key, media_key_timestamp,
 			file_sha256, file_enc_sha256, file_length, mimetype,
-			width, height, duration_seconds, thumbnail,
-			thumbnail_direct_path, thumbnail_sha256, thumbnail_enc_sha256,
+			width, height, duration_seconds,
 			is_animated,
-			is_ptt, waveform, is_gif, streaming_sidecar,
+			is_ptt, is_gif,
 			quoted_message_id, quoted_sender_lid, quoted_message_type, quoted_content,
 			mentioned_jids, group_mentions,
 			is_forwarded, forwarding_score,
@@ -189,10 +182,9 @@ func (s *MessageStore) Put(m *Message) error {
 			?, ?, ?,
 			?, ?, ?, ?,
 			?, ?, ?, ?,
-			?, ?, ?, ?,
 			?, ?, ?,
 			?,
-			?, ?, ?, ?,
+			?, ?,
 			?, ?, ?, ?,
 			?, ?,
 			?, ?,
@@ -219,10 +211,9 @@ func (s *MessageStore) Put(m *Message) error {
 		m.MessageType, nullString(m.TextContent), nullString(m.Caption),
 		nullString(m.MediaURL), nullString(m.MediaDirectPath), m.MediaKey, nullInt64(m.MediaKeyTimestamp),
 		m.FileSHA256, m.FileEncSHA256, nullInt64(m.FileLength), nullString(m.Mimetype),
-		nullInt(m.Width), nullInt(m.Height), nullInt(m.DurationSeconds), m.Thumbnail,
-		nullString(m.ThumbnailDirectPath), m.ThumbnailSHA256, m.ThumbnailEncSHA256,
+		nullInt(m.Width), nullInt(m.Height), nullInt(m.DurationSeconds),
 		boolToInt(m.IsAnimated),
-		boolToInt(m.IsPTT), m.Waveform, boolToInt(m.IsGIF), m.StreamingSidecar,
+		boolToInt(m.IsPTT), boolToInt(m.IsGIF),
 		nullString(m.QuotedMessageID), nullJID(m.QuotedSenderLID), nullString(m.QuotedMessageType), nullString(m.QuotedContent),
 		mentionedJIDs, groupMentions,
 		boolToInt(m.IsForwarded), nullInt(m.ForwardingScore),
@@ -247,7 +238,7 @@ func (s *MessageStore) Get(id string, chatJID types.JID) (*Message, error) {
 			message_type, text_content, caption,
 			media_url, media_direct_path, media_key, media_key_timestamp,
 			file_sha256, file_enc_sha256, file_length, mimetype,
-			width, height, duration_seconds, thumbnail,
+			width, height, duration_seconds,
 			quoted_message_id, quoted_sender_lid,
 			mentioned_jids, is_forwarded, forwarding_score,
 			is_ephemeral, is_view_once, is_starred, is_edited, edit_timestamp, is_revoked,
@@ -265,7 +256,7 @@ func (s *MessageStore) GetByChat(chatJID types.JID, limit, offset int) ([]*Messa
 			message_type, text_content, caption,
 			media_url, media_direct_path, media_key, media_key_timestamp,
 			file_sha256, file_enc_sha256, file_length, mimetype,
-			width, height, duration_seconds, thumbnail,
+			width, height, duration_seconds,
 			quoted_message_id, quoted_sender_lid,
 			mentioned_jids, is_forwarded, forwarding_score,
 			is_ephemeral, is_view_once, is_starred, is_edited, edit_timestamp, is_revoked,
@@ -367,14 +358,14 @@ func (s *MessageStore) scanMessageBasic(row *sql.Row) (*Message, error) {
 	var mediaKeyTs, fileLength sql.NullInt64
 	var fromMe, isForwarded, isEphemeral, isViewOnce, isStarred, isEdited, isRevoked int
 	var editTs sql.NullInt64
-	var mediaKey, fileSHA, fileEncSHA, thumbnail []byte
+	var mediaKey, fileSHA, fileEncSHA []byte
 
 	err := row.Scan(
 		&id, &chatJIDStr, &senderLID, &fromMe, &timestamp, &serverID, &pushName,
 		&msgType, &textContent, &caption,
 		&mediaURL, &mediaDirectPath, &mediaKey, &mediaKeyTs,
 		&fileSHA, &fileEncSHA, &fileLength, &mimetype,
-		&width, &height, &durationSecs, &thumbnail,
+		&width, &height, &durationSecs,
 		&quotedMsgID, &quotedSenderLID,
 		&mentionedJIDsJSON, &isForwarded, &forwardingScore,
 		&isEphemeral, &isViewOnce, &isStarred, &isEdited, &editTs, &isRevoked,
@@ -404,7 +395,6 @@ func (s *MessageStore) scanMessageBasic(row *sql.Row) (*Message, error) {
 		Width:           width,
 		Height:          height,
 		DurationSeconds: durationSecs,
-		Thumbnail:       thumbnail,
 		QuotedMessageID: quotedMsgID.String,
 		IsForwarded:     isForwarded == 1,
 		ForwardingScore: forwardingScore,
@@ -453,14 +443,14 @@ func (s *MessageStore) scanMessagesBasic(rows *sql.Rows) ([]*Message, error) {
 		var mediaKeyTs, fileLength sql.NullInt64
 		var fromMe, isForwarded, isEphemeral, isViewOnce, isStarred, isEdited, isRevoked int
 		var editTs sql.NullInt64
-		var mediaKey, fileSHA, fileEncSHA, thumbnail []byte
+		var mediaKey, fileSHA, fileEncSHA []byte
 
 		err := rows.Scan(
 			&id, &chatJIDStr, &senderLID, &fromMe, &timestamp, &serverID, &pushName,
 			&msgType, &textContent, &caption,
 			&mediaURL, &mediaDirectPath, &mediaKey, &mediaKeyTs,
 			&fileSHA, &fileEncSHA, &fileLength, &mimetype,
-			&width, &height, &durationSecs, &thumbnail,
+			&width, &height, &durationSecs,
 			&quotedMsgID, &quotedSenderLID,
 			&mentionedJIDsJSON, &isForwarded, &forwardingScore,
 			&isEphemeral, &isViewOnce, &isStarred, &isEdited, &editTs, &isRevoked,
@@ -490,7 +480,6 @@ func (s *MessageStore) scanMessagesBasic(rows *sql.Rows) ([]*Message, error) {
 			Width:           width,
 			Height:          height,
 			DurationSeconds: durationSecs,
-			Thumbnail:       thumbnail,
 			QuotedMessageID: quotedMsgID.String,
 			IsForwarded:     isForwarded == 1,
 			ForwardingScore: forwardingScore,

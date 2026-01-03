@@ -11,6 +11,20 @@ import (
 	"orion-agent/internal/service/agent/llm"
 )
 
+type InputMessage struct {
+	ChatJID         types.JID
+	SenderJID       types.JID
+	ID              string
+	Text            string
+	SenderLID       string
+	PushName        string
+	IsDM            bool
+	MentionedJIDs   []string
+	QuotedSenderLID types.JID
+	QuotedMessageID string
+	QuotedContent   string
+}
+
 // ContextResult holds the built context with index mapping.
 type ContextResult struct {
 	Messages   []llm.ChatMessage
@@ -39,7 +53,7 @@ func NewBuilder(s *store.Store, sumStore *store.SummaryStore, toolStore *store.T
 
 // BuildContext builds conversation context for a chat.
 // Returns ContextResult with messages, token count, and index mapping.
-func (b *Builder) BuildContext(chatJID types.JID, maxTokens int, ownJID types.JID) (*ContextResult, error) {
+func (b *Builder) BuildContext(chatJID types.JID, maxTokens int, ownJID types.JID, currentMsg *InputMessage) (*ContextResult, error) {
 	// Get latest summary if exists
 	var summaryText string
 	var summaryTokens int
@@ -87,12 +101,12 @@ func (b *Builder) BuildContext(chatJID types.JID, maxTokens int, ownJID types.JI
 		// Resolve sender name
 		senderName := b.resolveSenderName(msg, isDM, userIndexMap, &nextUserIndex)
 
-		// Format: {index}|{sender}|{content}
-		content := b.formatMessageContent(msg, index, senderName)
-		tokens := llm.EstimateTokens(content) + 4
-
-		// Store mapping
+		// Store mapping FIRST so replies can reference it
 		messageMap[index] = msg.ID
+
+		// Format: {index}|{sender}|{content} (with > prefix for replies)
+		content := b.formatMessageContent(msg, index, senderName, messageMap)
+		tokens := llm.EstimateTokens(content) + 4
 
 		// Check if this message has associated tool calls
 		toolRecord, _ := b.toolStore.GetByMessageID(msg.ID)
@@ -111,6 +125,76 @@ func (b *Builder) BuildContext(chatJID types.JID, maxTokens int, ownJID types.JI
 		})
 		totalTokens += tokens
 		index++
+	}
+
+	// Handle current message (deduplication and insertion)
+	if currentMsg != nil {
+		messageInContext := false
+		for _, msg := range messages {
+			if msg.ID == currentMsg.ID {
+				messageInContext = true
+				break
+			}
+		}
+
+		if !messageInContext {
+			// Resolve sender name for current message
+			// We need a temporary ContextMessage wrapper for the resolver
+			tempMsg := &ContextMessage{
+				FromMe:          false, // Current message is from user
+				PushName:        currentMsg.PushName,
+				SenderLID:       currentMsg.SenderLID,
+				QuotedMessageID: currentMsg.QuotedMessageID,
+				QuotedSenderLID: currentMsg.QuotedSenderLID.String(),
+				QuotedContent:   currentMsg.QuotedContent,
+			}
+			senderName := b.resolveSenderName(tempMsg, currentMsg.IsDM, userIndexMap, &nextUserIndex)
+
+			// Store in map first so formatMessageContent can use it
+			messageMap[index] = currentMsg.ID
+
+			// Format content with reply support
+			content := b.formatMessageContent(tempMsg, index, senderName, messageMap)
+			// Override text content for current message (it's not from DB)
+			if currentMsg.QuotedMessageID != "" {
+				// Find quoted message index
+				var quotedIndex int
+				for idx, msgID := range messageMap {
+					if msgID == currentMsg.QuotedMessageID {
+						quotedIndex = idx
+						break
+					}
+				}
+
+				quotedPreview := currentMsg.QuotedContent
+				if len(quotedPreview) > 50 {
+					quotedPreview = quotedPreview[:47] + "..."
+				}
+
+				quotedSender := "User"
+				mainLine := fmt.Sprintf("%d|%s|%s", index, senderName, currentMsg.Text)
+
+				if quotedIndex > 0 && quotedPreview != "" {
+					content = fmt.Sprintf("> %d|%s|%s\n%s", quotedIndex, quotedSender, quotedPreview, mainLine)
+				} else if quotedPreview != "" {
+					content = fmt.Sprintf("> ?|%s|%s\n%s", quotedSender, quotedPreview, mainLine)
+				} else {
+					content = mainLine
+				}
+			} else {
+				content = fmt.Sprintf("%d|%s|%s", index, senderName, currentMsg.Text)
+			}
+
+			tokens := llm.EstimateTokens(content) + 4
+
+			// Add to result
+			result = append(result, llm.ChatMessage{
+				Role:    llm.RoleUser,
+				Content: content,
+			})
+			totalTokens += tokens
+			index++
+		}
 	}
 
 	return &ContextResult{
@@ -132,6 +216,11 @@ type ContextMessage struct {
 	Timestamp   int64
 	SenderLID   string
 
+	// Quote/Reply context
+	QuotedMessageID string
+	QuotedSenderLID string
+	QuotedContent   string
+
 	// Contact info
 	FullName     string
 	FirstName    string
@@ -143,6 +232,7 @@ func (b *Builder) getMessagesAfter(chatJID types.JID, afterMsgID string, maxToke
 	query := `
 		SELECT 
 			m.id, m.from_me, m.push_name, m.message_type, m.text_content, m.caption, m.timestamp, m.sender_lid,
+			m.quoted_message_id, m.quoted_sender_lid, m.quoted_content,
 			c.full_name, c.first_name, c.business_name
 		FROM orion_messages m
 		LEFT JOIN orion_contacts c ON m.sender_lid = c.lid
@@ -192,11 +282,13 @@ func (b *Builder) getMessagesAfter(chatJID types.JID, afterMsgID string, maxToke
 func (b *Builder) scanContextMessage(rows *sql.Rows) (*ContextMessage, error) {
 	var msg ContextMessage
 	var pushName, textContent, caption, senderLID sql.NullString
+	var quotedMsgID, quotedSenderLID, quotedContent sql.NullString
 	var fullName, firstName, businessName sql.NullString
 	var fromMe int
 
 	err := rows.Scan(
 		&msg.ID, &fromMe, &pushName, &msg.MessageType, &textContent, &caption, &msg.Timestamp, &senderLID,
+		&quotedMsgID, &quotedSenderLID, &quotedContent,
 		&fullName, &firstName, &businessName,
 	)
 	if err != nil {
@@ -208,6 +300,9 @@ func (b *Builder) scanContextMessage(rows *sql.Rows) (*ContextMessage, error) {
 	msg.TextContent = textContent.String
 	msg.Caption = caption.String
 	msg.SenderLID = senderLID.String
+	msg.QuotedMessageID = quotedMsgID.String
+	msg.QuotedSenderLID = quotedSenderLID.String
+	msg.QuotedContent = quotedContent.String
 	msg.FullName = fullName.String
 	msg.FirstName = firstName.String
 	msg.BusinessName = businessName.String
@@ -255,7 +350,8 @@ func (b *Builder) resolveSenderName(msg *ContextMessage, isDM bool, userIndexMap
 }
 
 // formatMessageContent formats a message with index|sender|content format.
-func (b *Builder) formatMessageContent(msg *ContextMessage, index int, senderName string) string {
+// For replied messages, it prepends with > quotedIndex|sender|quotedContent
+func (b *Builder) formatMessageContent(msg *ContextMessage, index int, senderName string, messageMap map[int]string) string {
 	content := msg.TextContent
 	if content == "" {
 		content = msg.Caption
@@ -264,8 +360,44 @@ func (b *Builder) formatMessageContent(msg *ContextMessage, index int, senderNam
 		content = fmt.Sprintf("[%s]", msg.MessageType)
 	}
 
-	// Format: {index}|{sender}|{content}
-	return fmt.Sprintf("%d|%s|%s", index, senderName, content)
+	// Build the main message line
+	mainLine := fmt.Sprintf("%d|%s|%s", index, senderName, content)
+
+	// If this is a reply, prepend with quoted context
+	if msg.QuotedMessageID != "" {
+		// Find the quoted message index from messageMap
+		var quotedIndex int
+		for idx, msgID := range messageMap {
+			if msgID == msg.QuotedMessageID {
+				quotedIndex = idx
+				break
+			}
+		}
+
+		// Build quoted preview
+		quotedPreview := msg.QuotedContent
+		if len(quotedPreview) > 50 {
+			quotedPreview = quotedPreview[:47] + "..."
+		}
+
+		// Determine quoted sender name (simplified - use agent name if from self)
+		quotedSender := "Unknown"
+		if msg.QuotedSenderLID != "" {
+			// This is a simplified check - in production you'd look up the name
+			quotedSender = "User"
+		}
+
+		// Format: > quotedIndex|quotedSender|quotedPreview\n index|sender|content
+		if quotedIndex > 0 {
+			return fmt.Sprintf("> %d|%s|%s\n%s", quotedIndex, quotedSender, quotedPreview, mainLine)
+		}
+		// If quoted message not in context, just show preview
+		if quotedPreview != "" {
+			return fmt.Sprintf("> ?|%s|%s\n%s", quotedSender, quotedPreview, mainLine)
+		}
+	}
+
+	return mainLine
 }
 
 // formatToolMessages formats tool call/result as LLM messages.

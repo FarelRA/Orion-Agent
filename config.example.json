@@ -4,17 +4,47 @@
   "device_name": "Orion Agent",
   "sync_on_connect": true,
   "sync_interval_mins": 30,
-  "history_sync_pages": 10,
+  "media": {
+    "auto_download": true,
+    "history_sync_download": true,
+    "max_file_size_mb": 100,
+    "download_timeout_ms": 30000,
+    "retry_initial_backoff_ms": 500,
+    "retry_max_backoff_ms": 30000,
+    "retry_max_attempts": 3,
+    "worker_count": 3,
+    "types": [
+      "image",
+      "video",
+      "audio",
+      "document",
+      "sticker",
+      "profile_picture",
+      "view_once"
+    ]
+  },
   "ai": {
     "enabled": false,
-    "default_model": "default",
+    "default_model": "gpt-4o",
     "models": [
       {
-        "name": "default",
-        "api_key": "YOUR_API_KEY_HERE",
+        "name": "gpt-4o",
+        "api_key": "sk-...",
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4o",
-        "max_context": 128000
+        "max_completion_tokens": 4096,
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "response_format": "text",
+        "reasoning_effort": "medium",
+        "service_tier": "default",
+        "seed": 12345,
+        "audio": {
+          "voice": "alloy",
+          "format": "mp3"
+        }
       }
     ],
     "system_prompt": "You Orion Agent a helpful AI assistant on WhatsApp. Be concise and friendly.",
@@ -22,13 +52,20 @@
     "max_message_age": 300,
     "triggers": {
       "dm_auto_respond": true,
-      "group_mention_only": true,
+      "group_auto_respond": true,
+      "mention_to_me": true,
+      "reply_to_me": true,
       "trigger_words": [
         "Orion",
         "Noiro",
         "Agent",
         "AI"
       ]
-    }
+    },
+    "admins": [
+      "231580811403454@lid"
+    ],
+    "whitelist": [],
+    "blacklist": []
   }
 }

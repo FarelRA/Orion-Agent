@@ -21,10 +21,19 @@ func (s *SyncService) SyncUserInfo(ctx context.Context, jids ...types.JID) error
 	s.log.Debugf("Syncing user info for %v", jids)
 
 	jids = s.utils.NormalizeJIDs(ctx, jids)
-	infos, err := s.client.GetUserInfo(ctx, jids)
-	if err != nil || infos == nil {
+	var infos map[types.JID]types.UserInfo
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		infos, err = s.client.GetUserInfo(ctx, jids)
+		return err
+	})
+
+	if err != nil {
 		s.log.Errorf("Failed to get user info for %v: %v", jids, err)
 		return err
+	}
+	if infos == nil {
+		return nil
 	}
 
 	for jid, info := range infos {
@@ -71,7 +80,12 @@ func (s *SyncService) SyncProfilePicture(ctx context.Context, jid types.JID) err
 		IsCommunity: false,
 	}
 
-	pic, err := s.client.GetProfilePictureInfo(ctx, jid, params)
+	var pic *types.ProfilePictureInfo
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		pic, err = s.client.GetProfilePictureInfo(ctx, jid, params)
+		return err
+	})
 	if err != nil || pic == nil {
 		s.log.Debugf("No profile picture for %s: %v", jid, err)
 		// Mark as attempted with "0" so we don't retry on next initial sync
@@ -81,6 +95,11 @@ func (s *SyncService) SyncProfilePicture(ctx context.Context, jid types.JID) err
 
 	if err := s.contacts.UpdateProfilePic(jid, pic.ID, pic.URL); err != nil {
 		s.log.Warnf("Failed to update profile picture for %s: %v", jid, err)
+	}
+
+	// Queue for download (if auto-download enabled)
+	if s.media != nil {
+		s.media.QueueProfilePicture(jid, pic.ID, pic.URL)
 	}
 
 	s.log.Infof("Synced profile picture for %s", jid)
@@ -95,7 +114,12 @@ func (s *SyncService) SyncBlocklist(ctx context.Context) error {
 	}
 	s.log.Debugf("Syncing blocklist")
 
-	blocklist, err := s.client.GetBlocklist(ctx)
+	var blocklist *types.Blocklist
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		blocklist, err = s.client.GetBlocklist(ctx)
+		return err
+	})
 	if err != nil {
 		s.log.Errorf("Failed to get blocklist: %v", err)
 		return err
@@ -123,7 +147,12 @@ func (s *SyncService) ResolvePhoneNumbers(ctx context.Context, phones ...string)
 	s.log.Debugf("Resolving phone numbers: %v", phones)
 
 	result := make(map[string]types.JID)
-	responses, err := s.client.IsOnWhatsApp(ctx, phones)
+	var responses []types.IsOnWhatsAppResponse
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		responses, err = s.client.IsOnWhatsApp(ctx, phones)
+		return err
+	})
 	if err != nil || responses == nil {
 		s.log.Errorf("Failed to resolve phone numbers: %v", err)
 		return nil, err
@@ -152,7 +181,13 @@ func (s *SyncService) SyncUserDevices(ctx context.Context, jids ...types.JID) ([
 
 	jids = s.utils.NormalizeJIDs(ctx, jids)
 
-	jids, err := s.client.GetUserDevicesContext(ctx, jids)
+	jids = s.utils.NormalizeJIDs(ctx, jids)
+
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		jids, err = s.client.GetUserDevicesContext(ctx, jids)
+		return err
+	})
 	if err != nil || jids == nil {
 		s.log.Errorf("Failed to get user devices: %v", err)
 		return nil, err
@@ -189,7 +224,7 @@ func (s *SyncService) SyncAllContactPictures(ctx context.Context) error {
 	if s.client == nil || ctx.Err() != nil {
 		return ctx.Err()
 	}
-	s.log.Debugf("Syncing contact pictures (missing only)")
+	s.log.Debugf("Syncing contact pictures")
 
 	contacts, err := s.contacts.GetAll()
 	if err != nil || contacts == nil {
@@ -232,9 +267,6 @@ func (s *SyncService) SyncAllContactPictures(ctx context.Context) error {
 
 // OnNewContact syncs all info for a new/unknown contact.
 func (s *SyncService) OnNewContact(ctx context.Context, jid types.JID) {
-	if ctx.Err() != nil {
-		return
-	}
 	// Only sync user JIDs, not groups/newsletters
 	if jid.Server != types.DefaultUserServer && jid.Server != types.HiddenUserServer {
 		return

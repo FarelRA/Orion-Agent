@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"orion-agent/internal/data/store"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 // =============================================================================
@@ -17,7 +19,17 @@ func (s *SyncService) SyncPrivacySettings(ctx context.Context) error {
 	}
 	s.log.Debugf("Syncing privacy settings")
 
-	settings := s.client.GetPrivacySettings(ctx)
+	var settings *types.PrivacySettings
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		// Use TryFetchPrivacySettings to get error return for 429 handling
+		settings, err = s.client.TryFetchPrivacySettings(ctx, false)
+		return err
+	})
+	if err != nil {
+		s.log.Warnf("Failed to get privacy settings: %v", err)
+		return nil
+	}
 
 	privacySettings := &store.PrivacySettings{
 		GroupAdd:     string(settings.GroupAdd),
@@ -46,7 +58,12 @@ func (s *SyncService) SyncStatusPrivacy(ctx context.Context) error {
 	}
 	s.log.Debugf("Syncing status privacy")
 
-	privacy, err := s.client.GetStatusPrivacy(ctx)
+	var privacy []types.StatusPrivacy
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		privacy, err = s.client.GetStatusPrivacy(ctx)
+		return err
+	})
 	if err != nil {
 		s.log.Errorf("Failed to get status privacy: %v", err)
 		return err
@@ -90,7 +107,12 @@ func (s *SyncService) TryFetchPrivacySettings(ctx context.Context) error {
 	}
 	s.log.Debugf("Trying to fetch privacy settings")
 
-	settings, err := s.client.TryFetchPrivacySettings(ctx, true)
+	var settings *types.PrivacySettings
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		settings, err = s.client.TryFetchPrivacySettings(ctx, true)
+		return err
+	})
 	if err != nil {
 		s.log.Errorf("Failed to fetch privacy settings: %v", err)
 		return err

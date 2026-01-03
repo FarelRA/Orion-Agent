@@ -121,7 +121,7 @@ func (s *SettingsStore) GetCommandPrefix() string {
 
 // GetWhitelist returns the whitelist of JIDs.
 func (s *SettingsStore) GetWhitelist() []string {
-	return s.GetStringSlice("ai.whitelist", nil)
+	return s.GetStringSlice("ai.whitelist", s.config.AI.Whitelist)
 }
 
 // SetWhitelist sets the whitelist.
@@ -131,7 +131,7 @@ func (s *SettingsStore) SetWhitelist(jids []string) error {
 
 // GetBlacklist returns the blacklist of JIDs.
 func (s *SettingsStore) GetBlacklist() []string {
-	return s.GetStringSlice("ai.blacklist", nil)
+	return s.GetStringSlice("ai.blacklist", s.config.AI.Blacklist)
 }
 
 // SetBlacklist sets the blacklist.
@@ -151,7 +151,7 @@ func (s *SettingsStore) SetTriggerWords(words []string) error {
 
 // GetAdmins returns the list of admin JIDs.
 func (s *SettingsStore) GetAdmins() []string {
-	return s.GetStringSlice("ai.admins", nil)
+	return s.GetStringSlice("ai.admins", s.config.AI.Admins)
 }
 
 // SetAdmins sets the admin list.
@@ -175,7 +175,17 @@ func (s *SettingsStore) GetDMAutoRespond() bool {
 	return s.GetBool("ai.dm_auto_respond", s.config.AI.Triggers.DMAutoRespond)
 }
 
-// GetGroupMentionOnly returns whether to only respond to mentions in groups.
-func (s *SettingsStore) GetGroupMentionOnly() bool {
-	return s.GetBool("ai.group_mention_only", s.config.AI.Triggers.GroupMentionOnly)
+// GetGroupAutoRespond returns whether to respond in groups.
+func (s *SettingsStore) GetGroupAutoRespond() bool {
+	return s.GetBool("ai.group_auto_respond", s.config.AI.Triggers.GroupAutoRespond)
+}
+
+// GetMentionToMe returns whether to respond when someone mentions the agent.
+func (s *SettingsStore) GetMentionToMe() bool {
+	return s.GetBool("ai.mention_to_me", s.config.AI.Triggers.MentionToMe)
+}
+
+// GetReplyToMe returns whether to respond when someone replies to agent's message.
+func (s *SettingsStore) GetReplyToMe() bool {
+	return s.GetBool("ai.reply_to_me", s.config.AI.Triggers.ReplyToMe)
 }

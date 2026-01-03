@@ -1,268 +1,147 @@
+// Package event provides event handling services for WhatsApp data.
 package event
 
 import (
+	"context"
+
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
-// Dispatcher routes WhatsApp events to registered handlers.
+// Dispatcher routes incoming events to EventService handlers.
+// This is the internal dispatcher owned by EventService.
 type Dispatcher struct {
-	handlers []Handler
-	log      waLog.Logger
+	service *EventService
+	ctx     context.Context
+	log     waLog.Logger
 }
 
-// NewDispatcher creates a new Dispatcher.
-func NewDispatcher(log waLog.Logger) *Dispatcher {
+// NewDispatcher creates a new event dispatcher.
+func NewDispatcher(service *EventService, ctx context.Context, log waLog.Logger) *Dispatcher {
 	return &Dispatcher{
-		handlers: make([]Handler, 0),
-		log:      log.Sub("Dispatcher"),
+		service: service,
+		ctx:     ctx,
+		log:     log.Sub("EventDispatcher"),
 	}
 }
 
-// Register adds a handler to the dispatcher.
-func (d *Dispatcher) Register(h Handler) {
-	d.handlers = append(d.handlers, h)
-}
-
-// Handle processes a WhatsApp event and routes it to all registered handlers.
+// Handle routes an event to the appropriate EventService handler.
 func (d *Dispatcher) Handle(evt interface{}) {
-	switch e := evt.(type) {
-	// Connection events
-	case *events.Connected:
-		d.log.Debugf("Connected event")
-		for _, h := range d.handlers {
-			h.OnConnected(e)
-		}
-	case *events.Disconnected:
-		d.log.Debugf("Disconnected event")
-		for _, h := range d.handlers {
-			h.OnDisconnected(e)
-		}
-	case *events.LoggedOut:
-		d.log.Infof("Logged out: %v", e.Reason)
-		for _, h := range d.handlers {
-			h.OnLoggedOut(e)
-		}
-	case *events.StreamReplaced:
-		d.log.Infof("Stream replaced")
-		for _, h := range d.handlers {
-			h.OnStreamReplaced(e)
-		}
-	case *events.StreamError:
-		d.log.Errorf("Stream error: %v", e.Code)
-		for _, h := range d.handlers {
-			h.OnStreamError(e)
-		}
-	case *events.ConnectFailure:
-		d.log.Errorf("Connect failure: %s - %s", e.Reason, e.Message)
-		for _, h := range d.handlers {
-			h.OnConnectFailure(e)
-		}
-	case *events.ClientOutdated:
-		d.log.Errorf("Client outdated - update required")
-		for _, h := range d.handlers {
-			h.OnClientOutdated(e)
-		}
-	case *events.TemporaryBan:
-		d.log.Warnf("Temporary ban: code=%d, expires=%s", e.Code, e.Expire)
-		for _, h := range d.handlers {
-			h.OnTemporaryBan(e)
-		}
-	case *events.KeepAliveTimeout:
-		d.log.Warnf("Keep alive timeout, last success: %s", e.LastSuccess)
-		for _, h := range d.handlers {
-			h.OnKeepAliveTimeout(e)
-		}
-	case *events.KeepAliveRestored:
-		d.log.Infof("Keep alive restored")
-		for _, h := range d.handlers {
-			h.OnKeepAliveRestored(e)
-		}
+	if d.ctx.Err() != nil {
+		return
+	}
 
+	switch e := evt.(type) {
 	// Message events
 	case *events.Message:
 		d.log.Debugf("Message from %s in %s", e.Info.Sender, e.Info.Chat)
-		for _, h := range d.handlers {
-			h.OnMessage(e)
-		}
+		d.service.OnMessage(e)
 	case *events.Receipt:
 		d.log.Debugf("Receipt %s for %d messages", e.Type, len(e.MessageIDs))
-		for _, h := range d.handlers {
-			h.OnReceipt(e)
-		}
+		d.service.OnReceipt(e)
 	case *events.UndecryptableMessage:
 		d.log.Warnf("Undecryptable message from %s", e.Info.Sender)
-		for _, h := range d.handlers {
-			h.OnUndecryptableMessage(e)
-		}
-	case *events.MediaRetry:
-		d.log.Debugf("Media retry for %s", e.MessageID)
-		for _, h := range d.handlers {
-			h.OnMediaRetry(e)
-		}
+		d.service.OnUndecryptableMessage(e)
 
 	// Presence events
 	case *events.Presence:
-		for _, h := range d.handlers {
-			h.OnPresence(e)
-		}
+		d.service.OnPresence(e)
 	case *events.ChatPresence:
-		for _, h := range d.handlers {
-			h.OnChatPresence(e)
-		}
+		d.service.OnChatPresence(e)
+
+	// Contact events
+	case *events.Contact:
+		d.service.OnContact(e)
+	case *events.PushName:
+		d.service.OnPushName(e)
+	case *events.BusinessName:
+		d.service.OnBusinessName(e)
+	case *events.Picture:
+		d.service.OnPicture(e)
 
 	// Group events
 	case *events.GroupInfo:
 		d.log.Debugf("Group info update for %s", e.JID)
-		for _, h := range d.handlers {
-			h.OnGroupInfo(e)
-		}
+		d.service.OnGroupInfo(e)
 	case *events.JoinedGroup:
 		d.log.Infof("Joined group %s", e.JID)
-		for _, h := range d.handlers {
-			h.OnJoinedGroup(e)
-		}
-	case *events.Picture:
-		for _, h := range d.handlers {
-			h.OnPicture(e)
-		}
+		d.service.OnJoinedGroup(e)
 
 	// Newsletter events
 	case *events.NewsletterJoin:
 		d.log.Infof("Joined newsletter %s", e.ID)
-		for _, h := range d.handlers {
-			h.OnNewsletterJoin(e)
-		}
+		d.service.OnNewsletterJoin(e)
 	case *events.NewsletterLeave:
 		d.log.Infof("Left newsletter %s", e.ID)
-		for _, h := range d.handlers {
-			h.OnNewsletterLeave(e)
-		}
+		d.service.OnNewsletterLeave(e)
 	case *events.NewsletterLiveUpdate:
-		for _, h := range d.handlers {
-			h.OnNewsletterLiveUpdate(e)
-		}
+		d.service.OnNewsletterLiveUpdate(e)
 	case *events.NewsletterMuteChange:
-		for _, h := range d.handlers {
-			h.OnNewsletterMuteChange(e)
-		}
+		d.service.OnNewsletterMuteChange(e)
 
-	// AppState events
-	case *events.Contact:
-		for _, h := range d.handlers {
-			h.OnContact(e)
-		}
-	case *events.PushName:
-		for _, h := range d.handlers {
-			h.OnPushName(e)
-		}
-	case *events.BusinessName:
-		for _, h := range d.handlers {
-			h.OnBusinessName(e)
-		}
+	// Chat state events
 	case *events.Pin:
-		for _, h := range d.handlers {
-			h.OnPinChat(e)
-		}
+		d.service.OnPinChat(e)
 	case *events.Mute:
-		for _, h := range d.handlers {
-			h.OnMuteChat(e)
-		}
+		d.service.OnMuteChat(e)
 	case *events.Archive:
-		for _, h := range d.handlers {
-			h.OnArchiveChat(e)
-		}
+		d.service.OnArchiveChat(e)
 	case *events.Star:
-		for _, h := range d.handlers {
-			h.OnStarMessage(e)
-		}
+		d.service.OnStarMessage(e)
 	case *events.DeleteForMe:
-		for _, h := range d.handlers {
-			h.OnDeleteForMe(e)
-		}
+		d.service.OnDeleteForMe(e)
 	case *events.MarkChatAsRead:
-		for _, h := range d.handlers {
-			h.OnMarkChatAsRead(e)
-		}
+		d.service.OnMarkChatAsRead(e)
 	case *events.ClearChat:
-		for _, h := range d.handlers {
-			h.OnClearChat(e)
-		}
+		d.service.OnClearChat(e)
 	case *events.DeleteChat:
-		for _, h := range d.handlers {
-			h.OnDeleteChat(e)
-		}
-	case *events.HistorySync:
-		d.log.Infof("History sync: %d conversations", len(e.Data.GetConversations()))
-		for _, h := range d.handlers {
-			h.OnHistorySync(e)
-		}
-	case *events.AppStateSyncComplete:
-		d.log.Infof("App state sync complete: %s", e.Name)
-		for _, h := range d.handlers {
-			h.OnAppStateSyncComplete(e)
-		}
+		d.service.OnDeleteChat(e)
 
 	// Label events
 	case *events.LabelEdit:
-		for _, h := range d.handlers {
-			h.OnLabelEdit(e)
-		}
+		d.service.OnLabelEdit(e)
 	case *events.LabelAssociationChat:
-		for _, h := range d.handlers {
-			h.OnLabelAssociationChat(e)
-		}
+		d.service.OnLabelAssociationChat(e)
 	case *events.LabelAssociationMessage:
-		for _, h := range d.handlers {
-			h.OnLabelAssociationMessage(e)
-		}
+		d.service.OnLabelAssociationMessage(e)
 
 	// Privacy events
 	case *events.Blocklist:
-		for _, h := range d.handlers {
-			h.OnBlocklist(e)
-		}
+		d.service.OnBlocklist(e)
 	case *events.PrivacySettings:
-		for _, h := range d.handlers {
-			h.OnPrivacySettings(e)
-		}
+		d.service.OnPrivacySettings(e)
 
 	// Call events
 	case *events.CallOffer:
 		d.log.Debugf("Incoming call from %s", e.From)
-		for _, h := range d.handlers {
-			h.OnCallOffer(e)
-		}
+		d.service.OnCallOffer(e)
 	case *events.CallAccept:
-		for _, h := range d.handlers {
-			h.OnCallAccept(e)
-		}
+		d.service.OnCallAccept(e)
 	case *events.CallTerminate:
-		for _, h := range d.handlers {
-			h.OnCallTerminate(e)
-		}
+		d.service.OnCallTerminate(e)
 
 	// Identity events
 	case *events.IdentityChange:
 		d.log.Infof("Identity changed for %s", e.JID)
-		for _, h := range d.handlers {
-			h.OnIdentityChange(e)
-		}
+		d.service.OnIdentityChange(e)
+
+	// History sync events
+	case *events.HistorySync:
+		d.log.Infof("History sync: %d conversations", len(e.Data.GetConversations()))
+		d.service.OnHistorySync(e)
+	case *events.AppStateSyncComplete:
+		d.log.Infof("App state sync complete: %s", e.Name)
+		d.service.OnAppStateSyncComplete(e)
 
 	// Offline sync events
 	case *events.OfflineSyncPreview:
 		d.log.Infof("Offline sync preview: %d total, %d messages", e.Total, e.Messages)
-		for _, h := range d.handlers {
-			h.OnOfflineSyncPreview(e)
-		}
+		d.service.OnOfflineSyncPreview(e)
 	case *events.OfflineSyncCompleted:
 		d.log.Infof("Offline sync completed: %d events", e.Count)
-		for _, h := range d.handlers {
-			h.OnOfflineSyncCompleted(e)
-		}
+		d.service.OnOfflineSyncCompleted(e)
 
 	default:
-		// Log unknown events for debugging
 		d.log.Debugf("Unhandled event type: %T", evt)
 	}
 }

@@ -471,12 +471,7 @@ func (s *ContactStore) PutJIDMappings(mappings []JIDMapping) error {
 }
 
 // Exists checks if a contact exists by matching either LID or PN.
-// Returns true for non-user JIDs (groups, newsletters) to skip contact sync.
 func (s *ContactStore) Exists(jid types.JID) (bool, error) {
-	// Only check user JIDs - return true for others to skip sync
-	if jid.Server != types.DefaultUserServer && jid.Server != types.HiddenUserServer {
-		return true, nil
-	}
 	jidStr := jid.String()
 	var count int
 	err := s.store.QueryRow(`SELECT COUNT(*) FROM orion_contacts WHERE lid = ? OR pn = ?`, jidStr, jidStr).Scan(&count)

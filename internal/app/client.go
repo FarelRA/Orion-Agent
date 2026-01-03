@@ -34,8 +34,8 @@ func NewClient(cfg *config.Config, appStore *appstore.Store, log waLog.Logger) (
 	}
 
 	// Update device name from config
-	if cfg.DeviceName != "" && device.Platform != cfg.DeviceName {
-		device.Platform = cfg.DeviceName
+	device.Platform = cfg.DeviceName
+	if device.ID != nil {
 		if err := device.Save(context.Background()); err != nil {
 			log.Warnf("Failed to update device name: %v", err)
 		}

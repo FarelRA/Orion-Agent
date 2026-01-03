@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -11,12 +12,19 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"orion-agent/internal/data/store"
+	"orion-agent/internal/service/media"
 	"orion-agent/internal/utils"
 )
+
+type usyncRequest struct {
+	fn     func(context.Context) error
+	result chan error
+}
 
 type SyncService struct {
 	client *whatsmeow.Client
 	utils  *utils.Utils
+	media  *media.MediaService
 	log    waLog.Logger
 
 	// Internal dispatcher for coalescence
@@ -35,12 +43,16 @@ type SyncService struct {
 	schedulerCtx    context.Context
 	schedulerCancel context.CancelFunc
 	schedulerWg     sync.WaitGroup
+
+	// Usync Queue
+	usyncQueue chan usyncRequest
 }
 
 // NewSyncService creates a new SyncService.
 func NewSyncService(
 	client *whatsmeow.Client,
 	utils *utils.Utils,
+	media *media.MediaService,
 	contacts *store.ContactStore,
 	groups *store.GroupStore,
 	chats *store.ChatStore,
@@ -53,6 +65,7 @@ func NewSyncService(
 	s := &SyncService{
 		client:      client,
 		utils:       utils,
+		media:       media,
 		contacts:    contacts,
 		groups:      groups,
 		chats:       chats,
@@ -61,8 +74,69 @@ func NewSyncService(
 		newsletters: newsletters,
 		syncState:   syncState,
 		log:         log.Sub("SyncService"),
+		usyncQueue:  make(chan usyncRequest, 100),
 	}
+	// Start the worker immediately, it will block on channel receive
+	go s.startUSyncWorker()
 	return s
+}
+
+// performUSync adds a request to the queue and waits for it to complete.
+func (s *SyncService) performUSync(ctx context.Context, fn func(context.Context) error) error {
+	resultChan := make(chan error, 1)
+	select {
+	case s.usyncQueue <- usyncRequest{fn: fn, result: resultChan}:
+		select {
+		case err := <-resultChan:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// startUSyncWorker processes usync requests sequentially with rate limiting.
+func (s *SyncService) startUSyncWorker() {
+	// Global delay between requests
+	const globalDelay = 3 * time.Second
+
+	for req := range s.usyncQueue {
+		// Execute the request
+		// We use a background context or the service's context if we had one global one,
+		// but here we pass a fresh context or rely on the one inside 'fn' if strictly needed,
+		// usually the 'fn' closure captures the context from the caller.
+		// However, the caller is waiting on 'resultChan'.
+		// We should respect the caller's context cancellation in 'performUSync', but here we just run it.
+		// NOTE: The 'fn' passed usually uses 'ctx' captured from caller. If caller cancels, 'fn' might fail quickly.
+
+		// Run the function
+		err := req.fn(context.Background()) // We use background here as the func likely has the caller ctx embedded or we don't want to cancel the WORKER.
+		req.result <- err
+
+		// Handle rate limits / backoff
+		backoff := 0
+		if err != nil {
+			var iqErr *whatsmeow.IQError
+			if errors.As(err, &iqErr) && iqErr.Code == 429 {
+				if iqErr.ErrorNode != nil {
+					backoff = iqErr.ErrorNode.AttrGetter().OptionalInt("backoff")
+				}
+				if backoff == 0 && iqErr.RawNode != nil {
+					backoff = iqErr.RawNode.AttrGetter().OptionalInt("backoff")
+				}
+			}
+		}
+
+		if backoff > 0 {
+			s.log.Warnf("Global USync Worker: Rate limit hit. Sleeping for %d seconds...", backoff)
+			time.Sleep(time.Duration(backoff) * time.Second)
+		} else {
+			// standard delay to be nice to the server
+			time.Sleep(globalDelay)
+		}
+	}
 }
 
 // SetClient sets the whatsmeow client (for delayed initialization).

@@ -34,12 +34,7 @@ type Result struct {
 }
 
 // ShouldRespond evaluates if the agent should respond to a message.
-func (t *Trigger) ShouldRespond(chatJID, senderJID types.JID, messageText string, mentionedJIDs []string, fromMe bool) Result {
-	// Never respond to own messages
-	if fromMe {
-		return Result{false, "own message"}
-	}
-
+func (t *Trigger) ShouldRespond(messageText string, chatJID, senderJID types.JID, mentionedJIDs []string, quotedSenderLID types.JID) Result {
 	// Check if AI is enabled
 	if !t.settings.GetAIEnabled() {
 		return Result{false, "AI disabled"}
@@ -72,43 +67,56 @@ func (t *Trigger) ShouldRespond(chatJID, senderJID types.JID, messageText string
 	}
 
 	// Determine chat type
+	isDm := false
+	switch chatJID.Server {
+	case types.DefaultUserServer:
+		isDm = true
+	case types.HiddenUserServer:
+		isDm = true
+	}
 	isGroup := chatJID.Server == types.GroupServer
-	isNewsletter := chatJID.Server == types.NewsletterServer
 
-	// Never respond in newsletters
-	if isNewsletter {
-		return Result{false, "newsletter"}
+	// Never respond if not DM or group
+	if !isDm || !isGroup {
+		return Result{false, "not DM or group"}
 	}
 
 	// DM: auto-respond if enabled
-	if !isGroup {
+	if isDm {
 		if t.settings.GetDMAutoRespond() {
 			return Result{true, "DM auto-respond"}
 		}
 		return Result{false, "DM auto-respond disabled"}
 	}
 
-	// Group: check mention or trigger words
-	if t.settings.GetGroupMentionOnly() {
-		// Check if mentioned
-		if t.isMentioned(mentionedJIDs) {
-			return Result{true, "mentioned"}
+	// Group: auto-respond if enabled
+	if isGroup {
+		if t.settings.GetGroupAutoRespond() {
+			// Check if mentioned
+			if t.isMentioned(mentionedJIDs) {
+				return Result{true, "mentioned"}
+			}
+			// Check reply-to-me trigger
+			if t.isReplyToMe(quotedSenderLID) {
+				return Result{true, "reply to me"}
+			}
+			// Check trigger words
+			if t.hasTriggerWord(messageText) {
+				return Result{true, "trigger word"}
+			}
+			return Result{false, "not mentioned or triggered"}
 		}
-
-		// Check trigger words
-		if t.hasTriggerWord(messageText) {
-			return Result{true, "trigger word"}
-		}
-
-		return Result{false, "not mentioned or triggered"}
+		return Result{false, "group auto-respond disabled"}
 	}
 
-	// Group without mention-only: respond to all
-	return Result{true, "group auto-respond"}
+	return Result{true, "unhandled"}
 }
 
 // isMentioned checks if the bot is mentioned.
 func (t *Trigger) isMentioned(mentionedJIDs []string) bool {
+	if !t.settings.GetMentionToMe() {
+		return false
+	}
 	if t.ownJID.IsEmpty() {
 		return false
 	}
@@ -126,6 +134,27 @@ func (t *Trigger) isMentioned(mentionedJIDs []string) bool {
 		}
 	}
 	return false
+}
+
+// isReplyToMe checks if the message is a reply to the agent's message.
+func (t *Trigger) isReplyToMe(quotedSenderLID types.JID) bool {
+	// Check if reply-to-me trigger is enabled
+	if !t.settings.GetReplyToMe() {
+		return false
+	}
+
+	// Check if there's a quoted sender
+	if quotedSenderLID.IsEmpty() {
+		return false
+	}
+
+	// Check if own JID is set
+	if t.ownJID.IsEmpty() {
+		return false
+	}
+
+	// Compare the user part of the JIDs
+	return quotedSenderLID.User == t.ownJID.User
 }
 
 // hasTriggerWord checks if the message contains any trigger word.

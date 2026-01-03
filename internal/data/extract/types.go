@@ -17,7 +17,6 @@ type MediaInfo struct {
 	Width     int
 	Duration  int // seconds for audio/video
 	PageCount int // for documents
-	Thumbnail []byte
 }
 
 // QuoteInfo contains quoted message information.

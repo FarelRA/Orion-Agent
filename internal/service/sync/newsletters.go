@@ -20,7 +20,12 @@ func (s *SyncService) SyncAllNewsletters(ctx context.Context) error {
 	}
 	s.log.Debugf("Syncing all newsletters")
 
-	newsletters, err := s.client.GetSubscribedNewsletters(ctx)
+	var newsletters []*types.NewsletterMetadata
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		newsletters, err = s.client.GetSubscribedNewsletters(ctx)
+		return err
+	})
 	if err != nil {
 		s.log.Warnf("Failed to get subscribed newsletters: %v", err)
 		return nil
@@ -91,7 +96,12 @@ func (s *SyncService) SyncNewsletterPicture(ctx context.Context, jid types.JID) 
 		IsCommunity: false,
 	}
 
-	pic, err := s.client.GetProfilePictureInfo(ctx, jid, params)
+	var pic *types.ProfilePictureInfo
+	err := s.performUSync(ctx, func(ctx context.Context) error {
+		var err error
+		pic, err = s.client.GetProfilePictureInfo(ctx, jid, params)
+		return err
+	})
 	if err != nil || pic == nil {
 		s.log.Debugf("No newsletter picture for %s: %v", jid, err)
 		// Mark as attempted with "0"
@@ -101,6 +111,10 @@ func (s *SyncService) SyncNewsletterPicture(ctx context.Context, jid types.JID) 
 
 	if err := s.newsletters.UpdateProfilePic(jid, pic.ID, pic.URL); err != nil {
 		s.log.Warnf("Failed to update newsletter picture for %s: %v", jid, err)
+	}
+
+	if s.media != nil {
+		s.media.QueueProfilePicture(jid, pic.ID, pic.URL)
 	}
 
 	s.log.Infof("Synced newsletter picture for %s", jid)
@@ -113,10 +127,10 @@ func (s *SyncService) SyncAllNewsletterPictures(ctx context.Context) error {
 	if s.client == nil || ctx.Err() != nil {
 		return ctx.Err()
 	}
-	s.log.Debugf("Syncing newsletter pictures (missing only)")
+	s.log.Debugf("Syncing newsletter pictures")
 
 	newsletters, err := s.newsletters.GetAll()
-	if err != nil || newsletters == nil {
+	if err != nil {
 		s.log.Errorf("Failed to get all newsletters: %v", err)
 		return err
 	}
